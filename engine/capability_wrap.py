@@ -3,24 +3,34 @@ from __future__ import annotations
 from typing import Callable, Awaitable, Any, Dict, Optional
 
 from engine.pipeline_defaults import build_user_guarded
+from grounded.claims import current
+from engine.config import load_config
+from engine.guard_enforce import enforce_guard_before_respond
+from engine.errors import GuardRejection
+from engine.fallbacks import safe_text_fallback
 
 TextCap = Callable[[Any], Awaitable[str]] | Callable[[Any], str]
 GuardedTextCap = Callable[[Any], Awaitable[Dict[str,Any]]]
 
-async def guard_text_capability_for_user(
-    cap: TextCap, *, user_id: Optional[str]
-) -> GuardedTextCap:
-    """
-    עוטף capability שמחזיר מחרוזת כך שיחזיר {"text":..., "claims":[...]}
-    תחת Strict-Grounded per-user (כולל Evidences חובה, חתימה ו-Provenance).
-    """
-    wrapped = await build_user_guarded(cap, user_id=user_id)
 
-    async def _wrapped(x: Any) -> Dict[str,Any]:
-        out = await wrapped(x)
-        assert isinstance(out, dict) and "text" in out and "claims" in out
-        return out
+async def guard_text_capability_for_user(func: Callable[[Dict[str,Any]], Awaitable[str]], *, user_id: str):
+    """
+    עוטף יכולת שמחזירה טקסט. לפני החזרה — אוכפים Guard על הראיות שנצברו.
+    במקרה כשל Guard → Rejection+Fallback (בטוח), עדיין מחזירים claims מלאים.
+    """
+    async def _wrapped(payload: Dict[str,Any]) -> Dict[str,Any]:
+        cfg = load_config()
+        try:
+            # נסה להפיק טקסט (השלבים עד כה כבר הוסיפו ראיות לאורך הצנרת)
+            text = await func(payload)
+            # אוכפים Guard — אם אין מספיק ראיות/אמון/טריות: נזרוק חריגה
+            enforce_guard_before_respond(evidences=current().snapshot(), cfg=cfg)
+            return {"text": text, "claims": current().snapshot()}
+        except GuardRejection as gr:
+            fb = safe_text_fallback(reason=gr.reason, details=gr.details)
+            return {"text": fb, "claims": current().snapshot(), "guard_rejected": True}
     return _wrapped
+
 
 class CapabilityRegistry:
     """

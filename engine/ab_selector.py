@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Tuple
 import time
 
 from grounded.claims import current
+from grounded.provenance_confidence import effective_session_trust
 from engine.phi_multi import phi_score
 from engine.phi_multi_context import effective_weights
 from engine.pareto import pareto_front
@@ -15,13 +16,12 @@ def _simulate_perf(variant: Dict[str,Any]) -> Dict[str,float]:
     slow = "#SLOW" in code
     explore = "#EXPLORE" in code
 
-    base_p95 = 40.0 if fast else (400.0 if slow else 120.0)   # ms
+    base_p95 = 40.0 if fast else (400.0 if slow else 120.0)
     klen = max(1, len(code))
     cost_units = float(klen)
     mem_kb = float(min(5120, 0.02 * klen))
     energy_units = float(min(200.0, 0.0008 * klen * (2.0 if slow else 1.0)))
 
-    # ענישת יציבות קלה ל-EXPLORE: שגיאות מעט גבוהות יותר ואמון מעט נמוך יותר
     base_err = 0.01 if fast else (0.03 if slow else 0.02)
     base_trust = 0.92 if fast else (0.88 if slow else 0.90)
     if explore:
@@ -39,7 +39,6 @@ def _simulate_perf(variant: Dict[str,Any]) -> Dict[str,float]:
     }
 
 def _metrics_vector(perf: Dict[str,float]) -> List[float]:
-    # וקטור למינימיזציה עבור Pareto:
     return [
         float(perf["p95_ms"]),
         float(perf["cost_units"]),
@@ -51,27 +50,29 @@ def _metrics_vector(perf: Dict[str,float]) -> List[float]:
 
 def select_best(variants: List[Dict[str,Any]], *, spec: Dict[str,Any] | None = None,
                 user_id: str = "default", intents: List[str] | None = None) -> Dict[str,Any]:
+    from grounded.claims import current
     prof = get_profile(user_id)
     user_weights = dict(prof.get("phi_weights", {}))
     eff_weights = effective_weights(user_weights, intents or [])
 
-    # חישוב מטריקות+Φ לכל וריאציה
+    # אמון אפקטיבי של הסשן—נעניש Φ אם נמוך
+    sess_trust = effective_session_trust(current().snapshot())
+    distrust_penalty = (1.0 - float(sess_trust)) * 50.0  # סקיילר צנוע אך מורגש
+
     scored: List[Tuple[float, Dict[str,float], Dict[str,Any]]] = []
     vectors: List[List[float]] = []
     for v in variants:
         perf = _simulate_perf(v)
-        phi = phi_score(perf, eff_weights)
+        phi = phi_score(perf, eff_weights) + distrust_penalty
         vectors.append(_metrics_vector(perf))
         scored.append((phi, perf, v))
 
-    # חזית Pareto
     frontier_idx = set(pareto_front(vectors))
     frontier = [scored[i] for i in frontier_idx]
-    # בוחרים מנצח על החזית לפי Φ (המשוקלל-הקשר)
     frontier.sort(key=lambda x: x[0])
     best_phi, best_perf, best_v = frontier[0]
 
-    # Evidences
+    # ראיה על החלטת A/B עם אמון־סשן
     current().add_evidence("ab_decision_ctx_pareto", {
         "source_url": "local://ab_ctx_pareto",
         "trust": 0.95,
@@ -79,6 +80,7 @@ def select_best(variants: List[Dict[str,Any]], *, spec: Dict[str,Any] | None = N
         "payload": {
             "intents": intents or [],
             "weights_effective": eff_weights,
+            "session_trust": float(sess_trust),
             "frontier_size": len(frontier),
             "chosen": {"label": best_v.get("label"), "phi": float(best_phi),
                        "p95_ms": float(best_perf["p95_ms"]),
