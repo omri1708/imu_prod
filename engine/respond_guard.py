@@ -1,4 +1,4 @@
-# imu_repo/engine/respond_guard.py
+# imu_repo/engine/respond_guard.py  (גרסה מעודכנת עם Provenance)
 from __future__ import annotations
 import time
 import email.utils as eutils
@@ -8,6 +8,7 @@ from engine.cas_store import put_json, put_bytes
 from engine.audit_log import record_event
 from engine.trust_tiers import enforce_trust_requirements, TrustPolicyError
 from engine.consistency import validate_claims_and_consistency, ConsistencyError
+from engine.provenance import enforce_min_provenance, ProvenanceError
 
 class RespondBlocked(Exception): ...
 
@@ -141,36 +142,34 @@ def ensure_proof_and_package(
     policy: Dict[str,Any],
     http_fetcher=None
 ) -> Dict[str,Any]:
-    """
-    Gate מלא:
-      - מבנה טענות + קיום ראיות
-      - Trust tiers + מינ' מקורות/נק' אמון
-      - סכימות + הצלבת ערכים בקבוצות עקביות
-      - אימות HTTP (דומיין/סטטוס/רעננות/הורדה-אופציונלית)
-      - אריזת Evidence ל-CAS + Audit
-    """
-    # 1) מבנה/חובה
     if bool(policy.get("require_claims_for_all_responses", True)):
         _validate_claims_structure(claims)
     elif not claims:
-        bundle = {"version":1,"claims":[], "evidence":[], "map":{}, "ts": _now_ts()}
+        bundle = {"version":1,"claims":[], "evidence":[], "map":{}, "ts": time.time()}
         proof_hash = put_json(bundle)
         resp_hash = put_bytes(response_text.encode("utf-8"))
         record_event("respond_proof_ok", {"claims":0,"evidence":0,"proof_hash":proof_hash,"response_hash":resp_hash}, severity="info")
         return {"ok": True, "proof_hash": proof_hash, "proof": bundle, "response_hash": resp_hash}
 
-    # 2) Trust+Consistency+Schema
     try:
-        _apply_trust_and_consistency(claims, policy)
-    except (TrustPolicyError, ConsistencyError) as e:
+        # Trust + Consistency
+        validate_claims_and_consistency(
+            claims,
+            require_consistency_groups=bool(policy.get("require_consistency_groups", False)),
+            default_number_tolerance=float(policy.get("default_number_tolerance", 0.01))
+        )
+        for c in claims:
+            enforce_trust_requirements(c, policy)
+            enforce_min_provenance(c, policy)
+    except (TrustPolicyError, ConsistencyError, ProvenanceError) as e:
         raise RespondBlocked(str(e))
 
-    # 3) אריזת ראיות + CAS
+    # אריזת ראיות ל-CAS
     packed, cmap = _pack_evidence_list(claims, policy=policy, http_fetcher=http_fetcher)
     bundle = {
-        "version": 1,
-        "ts": _now_ts(),
-        "claims": [{"id":c["id"], "text":c["text"], "schema": c.get("schema"), "value": c.get("value"), "group": c.get("consistency_group")} for c in claims],
+        "version": 2,
+        "ts": time.time(),
+        "claims": [{"id":c["id"], "text":c["text"], "schema": c.get("schema"), "value": c.get("value"), "group": c.get("consistency_group"), "type": c.get("type")} for c in claims],
         "evidence": packed,
         "map": cmap
     }
