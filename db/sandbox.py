@@ -3,6 +3,10 @@ from __future__ import annotations
 import os, json, sqlite3, time, re, threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from grounded.claims import current
+from db.contracts import SchemaContract, ensure_schema, validate_query, QueryRejected, SchemaMismatchError
+
+
 DB_ROOT = "/mnt/data/imu_repo/db"
 META_ROOT = "/mnt/data/imu_repo/db/meta"
 os.makedirs(DB_ROOT, exist_ok=True)
@@ -17,6 +21,83 @@ class DBPolicyError(Exception): ...
 class DBAclError(Exception): ...
 class DBQuotaError(Exception): ...
 class DBTtlError(Exception): ...
+
+
+class DBSandbox:
+    """
+    Sandbox SQLite (in-memory או קובץ), עם:
+    - PRAGMA בטיחות (foreign_keys, journal_mode=WAL, busy_timeout)
+    - חוזה סכימה מאומת (ensure_schema)
+    - טרנזקציות BEGIN IMMEDIATE / COMMIT / ROLLBACK
+    - Evidences בכל שלב (begin/exec/commit/rollback)
+    - אכיפת SELECT ... LIMIT (ברירת מחדל)
+    """
+    def __init__(self, path: str | None = None, *, memory: bool = True, busy_timeout_ms: int = 5000):
+        self.path = ":memory:" if memory else (path or "imu_db.sqlite3")
+        self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        self.conn.execute("PRAGMA foreign_keys=ON;")
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA synchronous=NORMAL;")
+        self.conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")
+        self._lock = threading.RLock()
+        self._contract: SchemaContract | None = None
+
+    def close(self):
+        with self._lock:
+            self.conn.close()
+
+    def ensure_contract(self, contract: SchemaContract):
+        with self._lock:
+            ensure_schema(self.conn, contract, create_if_missing=True)
+            self._contract = contract
+
+    def _guard_query(self, sql: str):
+        if not self._contract:
+            raise SchemaMismatchError("no schema contract set")
+        validate_query(sql, self._contract, require_limit_on_select=True, max_limit=1000)
+
+    def execute(self, sql: str, params: Tuple[Any, ...] = (), *, evidence: bool=True) -> Tuple[str, List[Tuple[Any,...]]]:
+        with self._lock:
+            self._guard_query(sql)
+            cur = self.conn.execute(sql, params)
+            rows = []
+            if sql.strip().upper().startswith("SELECT"):
+                rows = cur.fetchall()
+            if evidence:
+                current().add_evidence("db_exec", {
+                    "source_url":"sqlite:///sandbox","trust":0.95,"ttl_s":600,
+                    "payload":{"sql": sql, "rowcount": cur.rowcount}
+                })
+            return sql, rows
+
+    def transaction(self, ops: Iterable[Tuple[str, Tuple[Any,...]]]) -> Dict[str, Any]:
+        """
+        מריץ טרנזקציה אטומית. אם אחת השאילתות נופלת — מתבצע ROLLBACK.
+        חזרה: {"ok":bool, "results":[(sql, rows)], "error":str|None}
+        """
+        with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE;")
+            current().add_evidence("db_tx_begin", {"source_url":"sqlite:///sandbox","trust":0.96,"ttl_s":600,"payload":{}})
+            results: List[Tuple[str,List[Tuple[Any,...]]]] = []
+            try:
+                for sql, params in ops:
+                    self._guard_query(sql)
+                    cur = self.conn.execute(sql, params)
+                    rows = []
+                    if sql.strip().upper().startswith("SELECT"):
+                        rows = cur.fetchall()
+                    current().add_evidence("db_exec", {
+                        "source_url":"sqlite:///sandbox","trust":0.95,"ttl_s":600,
+                        "payload":{"sql": sql, "rowcount": cur.rowcount}
+                    })
+                    results.append((sql, rows))
+                self.conn.execute("COMMIT;")
+                current().add_evidence("db_tx_commit", {"source_url":"sqlite:///sandbox","trust":0.97,"ttl_s":600,"payload":{"ops": len(results)}})
+                return {"ok": True, "results": results, "error": None}
+            except (sqlite3.Error, QueryRejected, SchemaMismatchError) as e:
+                self.conn.execute("ROLLBACK;")
+                current().add_evidence("db_tx_rollback", {"source_url":"sqlite:///sandbox","trust":0.5,"ttl_s":600,"payload":{"error": type(e).__name__, "msg": str(e)}})
+                return {"ok": False, "results": results, "error": f"{type(e).__name__}: {e}"}
 
 def _ns_path(ns: str) -> str:
     return os.path.join(DB_ROOT, f"{ns}.db")
