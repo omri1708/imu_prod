@@ -102,9 +102,23 @@ def check_runtime_table(
         else:
             record_event("runtime_no_drift", {"url": url, "hash": rec["hash"]}, severity="info")
 
+    # עדכון previous.json אם state_dir פעיל
+    try:
+        state_dir = policy.get("runtime_state_dir")
+        if state_dir:
+            import os, json, hashlib
+            os.makedirs(state_dir, exist_ok=True)
+            safe = hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+            prev_f = os.path.join(state_dir, f"{safe}.json")
+            with open(prev_f, "w", encoding="utf-8") as fh:
+                json.dump({"hash": rec["hash"], "url": url, "ts": meta.get("sampled")}, fh)
+    except Exception:
+        pass
+
     return {"ok": True, "sampled": len(rows), "checked": checked, "hash": rec["hash"]}
 
 # TODO- הערה: כדי לחסום Drift
 #  כבר מהריצה השנייה ללא תלות חיצונית, אפשר לשמור לפני כתיבת הדגימה החדשה את “האחרון” ולהשוות — אבל בלי לשנות סמנטיקה, 
 # תמכנו כאן ב־policy.prev_content_hash (ב־CI/קנרי אפשר להזין את הבייסליין).
 #  אם תרצה — אעדכן לוגיקה ששומרת “previous.json” ומחזירה השוואה בתוך הפונקציה עצמה.
+# done?

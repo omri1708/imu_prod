@@ -1,12 +1,85 @@
 # imu_repo/engine/audit_log.py
 from __future__ import annotations
-import os, json, time, hashlib
-from typing import Dict, Any, Optional
+import os, json, hashlib, hmac, time, uuid
+from typing import Any, Dict, Optional, List
 from security.signing import sign_manifest, verify_manifest
+
+from engine.cas_store import put_json
 
 AUDIT_PATH = os.environ.get("IMU_AUDIT_LOG", "/mnt/data/imu_audit.log.jsonl")
 
 class AuditError(Exception): ...
+
+
+
+def _audit_root() -> str:
+    return os.environ.get("IMU_AUDIT_DIR", os.path.abspath(".imu_audit"))
+
+def _log_path() -> str:
+    return os.path.join(_audit_root(), "audit.log.jsonl")
+
+def _ensure():
+    os.makedirs(_audit_root(), exist_ok=True)
+
+def _canonical(obj: Any) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+def _sha256_hex(b: bytes) -> str:
+    h = hashlib.sha256(); h.update(b); return h.hexdigest()
+
+def _sign_entry(entry_body: Dict[str,Any]) -> Dict[str,Any]:
+    """
+    חותם את גוף האירוע. אם IMU_AUDIT_KEY קיים — HMAC-SHA256.
+    אחרת — fingerprint = SHA256(body).
+    """
+    key = os.environ.get("IMU_AUDIT_KEY")
+    canon = _canonical(entry_body)
+    if key:
+        sig = hmac.new(key.encode("utf-8"), canon, hashlib.sha256).hexdigest()
+        return {"mode": "hmac-sha256", "value": sig}
+    else:
+        return {"mode": "sha256", "value": _sha256_hex(canon)}
+
+def record_event(
+    event: str,
+    payload: Dict[str,Any],
+    *,
+    severity: str = "info",
+    snap_before: Optional[Dict[str,Any]] = None,
+    snap_after: Optional[Dict[str,Any]] = None,
+    changed_paths: Optional[List[str]] = None
+) -> Dict[str,Any]:
+    """
+    רושם אירוע ל־audit.log.jsonl עם חתימה ו־CAS Snapshots (אם ניתנו).
+    מחזיר את גוף הרשומה (כולל cas refs).
+    """
+    _ensure()
+    ts = time.time()
+    entry_id = str(uuid.uuid4())
+    cas_refs: Dict[str,Any] = {}
+    if snap_before is not None:
+        cas_refs["before"] = put_json(snap_before)
+    if snap_after is not None:
+        cas_refs["after"] = put_json(snap_after)
+    body = {
+        "id": entry_id,
+        "ts": ts,
+        "event": event,
+        "severity": severity,
+        "payload": payload or {},
+        "cas": cas_refs or None,
+        "changed_paths": changed_paths or None,
+        "version": 1
+    }
+    sig = _sign_entry(body)
+    entry = {"signature": sig, **body}
+    with open(_log_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+
+
 
 def _now_ts() -> int: return int(time.time())
 
@@ -19,7 +92,7 @@ def _read_last_record() -> Optional[Dict[str,Any]]:
                 last = json.loads(line)
     return last
 
-def record_event(action: str, details: Dict[str,Any], *, severity: str="info") -> Dict[str,Any]:
+def _record_event(action: str, details: Dict[str,Any], *, severity: str="info") -> Dict[str,Any]:
     """
     רושם אירוע חתום, כולל hash של הרשומה הקודמת לצורך שרשור.
     """

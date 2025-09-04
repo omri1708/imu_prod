@@ -27,6 +27,7 @@ def run_negative_suite(
     evidences: List[Dict[str, Any]],
     *,
     policy: Dict[str, Any],
+    runtime_fetcher: Optional[Any] = None,   # ← חדש: הזרקת fetcher לבדיקות
 ) -> Dict[str, Any]:
     """
     Negative Guard מלא לפני rollout:
@@ -87,8 +88,8 @@ def run_negative_suite(
     max_rounds     = int(auto.get("max_rounds", 1))
 
     if bool(policy.get("runtime_check_enabled", True)):
-        prev_map        = policy.get("runtime_prev_hash_map") or policy.get("prev_hash_map") or {}
-        fetcher         = policy.get("runtime_fetcher")
+        prev_map = policy.get("runtime_prev_hash_map") or policy.get("prev_hash_map") or {}
+        fetcher = runtime_fetcher or policy.get("runtime_fetcher")
         block_on_drift  = bool(policy.get("block_on_drift", False))
 
         for spec in table_specs:
@@ -138,7 +139,7 @@ def run_negative_suite(
                                  {"table": table_id, "reason": str(rb), "round": rounds},
                                  severity="error")
                     if not auto_enabled or rounds >= max_rounds:
-                        raise RolloutBlocked(f"runtime_error: {rb}")
+                        raise RolloutBlocked(f"runtime_error: {rb}") from rb
                     # ריפוי אוטומטי פר-טבלה: מאבחנים ומיישמים רק על הטבלה הנוכחית
                     diags    = diagnose(rb)
                     remedies = [r for r in propose_remedies(diags, policy=policy, table_specs=[spec])
@@ -168,7 +169,7 @@ def run_negative_suite(
                 {"baseline": base_path, "candidate": cand_path, "reason": str(kb)},
                 severity="error",
             )
-            raise RolloutBlocked(f"kpi_regression: {kb}")
+            raise RolloutBlocked(f"kpi_regression: {kb}") from kb
 
     return {
         "ok": True,

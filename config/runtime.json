@@ -1,0 +1,42 @@
+{
+  "ws": {
+    "chunk_size": 64000,
+    "permessage_deflate": true,
+    "max_pending_msgs": 1024
+  },
+  "guard": {
+    "min_trust": 0.7,
+    "max_age_s": 3600
+  },
+  "evidence": {
+    "required": true
+  },
+
+  "composer": {
+    "mode": "merge"
+  },
+
+  "policy": {
+    "runtime_check_enabled": true,
+    "block_on_drift": true,
+
+    "runtime_state_dir": "/mnt/data/imu_repo/runs/runtime_state",
+
+    "auto_remediation": {
+      "enabled": true,
+      "apply_levels": ["conservative"],
+      "max_rounds": 1
+    },
+
+    "runtime_prev_hash_map": {
+      "https://api.example.com/orders": "9e1caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2f"
+    },
+
+    "kpi_baseline_path": "/mnt/data/imu_repo/runs/kpi/baseline.jsonl",
+    "kpi_candidate_path": "/mnt/data/imu_repo/runs/kpi/candidate.jsonl",
+
+    "max_p95_increase_ms": 10.0,
+    "max_error_rate_increase": 0.0,
+    "block_on_schema_regression": true
+  }
+}

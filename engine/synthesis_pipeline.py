@@ -304,7 +304,21 @@ async def run_pipeline(
     "schema": guard_res.get("schema"),
 })
 
-    return {"ok": True, "text": out, "pkg": signed_pkg, "guard": guard_res}
+    return {
+        "ok": True,
+        "text": out,                    # מה שנפלט ל-user capability
+        "pkg": {                        # סיכום קצר מתוך build_ui_artifact
+            "sha256": signed_pkg.get("sha256"),
+            "manifest": signed_pkg.get("manifest"),            # המניפסט החתום
+            "provenance": signed_pkg.get("provenance", {}),    # כולל artifact_sha / manifest_sha / agg_trust
+        },
+        "guard": guard_res,             # בדיוק מה שחוזר מ-run_negative_suite (general/schema/runtime/kpi)
+        "gate": {
+            "before": gate_before,      # תוצאת Evidence Gate #1
+            "after":  gate_after        # תוצאת Evidence Gate #2
+        }
+    }
+
 
 
 
