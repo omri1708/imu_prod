@@ -8,22 +8,20 @@ from engine.config import load_config
 from engine.guard_enforce import enforce_guard_before_respond
 from engine.errors import GuardRejection
 from engine.fallbacks import safe_text_fallback
+from engine.official_gate import run_official_checks 
 
 TextCap = Callable[[Any], Awaitable[str]] | Callable[[Any], str]
 GuardedTextCap = Callable[[Any], Awaitable[Dict[str,Any]]]
 
 
 async def guard_text_capability_for_user(func: Callable[[Dict[str,Any]], Awaitable[str]], *, user_id: str):
-    """
-    עוטף יכולת שמחזירה טקסט. לפני החזרה — אוכפים Guard על הראיות שנצברו.
-    במקרה כשל Guard → Rejection+Fallback (בטוח), עדיין מחזירים claims מלאים.
-    """
     async def _wrapped(payload: Dict[str,Any]) -> Dict[str,Any]:
         cfg = load_config()
         try:
-            # נסה להפיק טקסט (השלבים עד כה כבר הוסיפו ראיות לאורך הצנרת)
             text = await func(payload)
-            # אוכפים Guard — אם אין מספיק ראיות/אמון/טריות: נזרוק חריגה
+            # קודם מפעילים אימות רשמי (יאסוף official_verified אם אפשר)
+            run_official_checks(cfg)
+            # ואז אוכפים Guard כללי (שיכול לכלול דרישה ל-official_verified)
             enforce_guard_before_respond(evidences=current().snapshot(), cfg=cfg)
             return {"text": text, "claims": current().snapshot()}
         except GuardRejection as gr:
