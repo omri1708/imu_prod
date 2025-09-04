@@ -1,29 +1,56 @@
-# synth/schema_validate.py
+# imu_repo/synth/schema_validate.py
 from __future__ import annotations
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Optional
 
-class SchemaError(Exception): ...
+class ClaimSchemaError(Exception): ...
 
-def validate(obj: Any, schema: Dict[str,Any]) -> Tuple[bool, List[str]]:
-    errs: List[str] = []
-    st = schema.get("type")
-    if st:
-        if st=="object" and not isinstance(obj, dict): errs.append("type_object")
-        if st=="array"  and not isinstance(obj, list): errs.append("type_array")
-        if st=="string" and not isinstance(obj, str):  errs.append("type_string")
-        if st=="number" and not (isinstance(obj, int) or isinstance(obj, float)): errs.append("type_number")
-        if st=="integer" and not isinstance(obj, int): errs.append("type_integer")
-        if st=="boolean" and not isinstance(obj, bool): errs.append("type_boolean")
-    if isinstance(obj, (int,float)):
-        if "minimum" in schema and obj < schema["minimum"]: errs.append("too_small")
-        if "maximum" in schema and obj > schema["maximum"]: errs.append("too_large")
-    if isinstance(obj, dict):
-        req = schema.get("required") or []
-        for k in req:
-            if k not in obj: errs.append(f"missing:{k}")
-        props = schema.get("properties") or {}
-        for k, sub in props.items():
-            if k in obj:
-                ok, e = validate(obj[k], sub)
-                if not ok: errs += [f"{k}.{ee}" for ee in e]
-    return (len(errs)==0, errs)
+def _ensure_num(x: Any, name: str) -> float:
+    if isinstance(x, (int, float)):
+        return float(x)
+    raise ClaimSchemaError(f"{name} must be number")
+
+def validate_claim_schema(claim: Dict[str,Any]) -> None:
+    """
+    תומך ב:
+      - {"schema":{"type":"number","unit":"ms|s|pct|any","min":..,"max":..,"tolerance":..}, "value": <number>}
+      - {"schema":{"type":"string","min_len":...,"max_len":...}, "value": <str>}
+      - {"schema":{"type":"enum","choices":[...]}, "value": <str>}
+    """
+    schema = claim.get("schema")
+    if not schema:
+        return  # לא חובה
+    typ = schema.get("type")
+    if typ == "number":
+        v = _ensure_num(claim.get("value"), "value")
+        u = (schema.get("unit") or "any").lower()
+        if "min" in schema:
+            if v < float(schema["min"]):
+                raise ClaimSchemaError(f"value {v} < min {schema['min']}")
+        if "max" in schema:
+            if v > float(schema["max"]):
+                raise ClaimSchemaError(f"value {v} > max {schema['max']}")
+        if u not in ("ms","s","pct","any"):
+            raise ClaimSchemaError(f"unknown unit {u}")
+        # tolerance לא נבדק כאן (רק בהצלבה)
+    elif typ == "string":
+        s = claim.get("value")
+        if not isinstance(s, str):
+            raise ClaimSchemaError("value must be string")
+        if "min_len" in schema and len(s) < int(schema["min_len"]):
+            raise ClaimSchemaError("string too short")
+        if "max_len" in schema and len(s) > int(schema["max_len"]):
+            raise ClaimSchemaError("string too long")
+    elif typ == "enum":
+        s = claim.get("value")
+        choices = schema.get("choices") or []
+        if s not in choices:
+            raise ClaimSchemaError(f"value '{s}' not in choices")
+    else:
+        raise ClaimSchemaError(f"unsupported schema type: {typ}")
+
+def consistent_numbers(a: float, b: float, tol: float) -> bool:
+    if tol < 0:
+        tol = 0.0
+    # בדיקת |a-b| <= tol*max(|a|,|b|,1)
+    scale = max(abs(a), abs(b), 1.0)
+    return abs(a - b) <= (tol * scale)

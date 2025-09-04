@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from engine.cas_store import put_json, put_bytes
 from engine.audit_log import record_event
+from engine.trust_tiers import enforce_trust_requirements, TrustPolicyError
+from engine.consistency import validate_claims_and_consistency, ConsistencyError
 
 class RespondBlocked(Exception): ...
 
@@ -56,7 +58,7 @@ def _evidence_http_pack(
     e: Dict[str,Any],
     *,
     policy: Dict[str,Any],
-    http_fetcher=None   # Optional[(url, method) -> (status:int, headers:dict, body:bytes|None)]
+    http_fetcher=None
 ) -> Dict[str,Any]:
     url = e.get("url")
     if not isinstance(url, str) or not url.startswith(("http://","https://")):
@@ -64,37 +66,38 @@ def _evidence_http_pack(
     trusted = policy.get("trusted_domains")  # list[str] or None
     if not _host_allowed(url, trusted):
         raise RespondBlocked(f"evidence_http_untrusted_host: {url}")
-    # אימות בסיסי: HEAD (או GET לפי מדיניות)
+
     method = "HEAD"
     must_download = bool(policy.get("http_download_for_hash", False))
     if must_download:
         method = "GET"
-    # fetch (מזריק בבדיקות; בפרודקשן אפשר להשתמש urllib.request)
+
     status, headers, body = (None, None, None)
     if http_fetcher is not None:
         status, headers, body = http_fetcher(url, method)
     else:
-        # מימוש stdlib: urllib
         import urllib.request
         req = urllib.request.Request(url, method=method)
         with urllib.request.urlopen(req, timeout=float(policy.get("http_timeout_sec", 5.0))) as resp:
             status = resp.status
             headers = {k.lower(): v for k,v in resp.getheaders()}
             body = resp.read() if must_download else None
+
     if not (200 <= int(status) < 400):
         raise RespondBlocked(f"evidence_http_status_not_ok: {status} for {url}")
-    # בדיקת עדכניות (אופציונלי)
+
     max_age_days = policy.get("max_http_age_days")
     if isinstance(max_age_days, (int,float)):
         dt = _parse_date_header((headers or {}).get("date"))
         if dt is not None and (_now_ts() - dt) > (float(max_age_days)*86400.0):
             raise RespondBlocked(f"evidence_http_stale: {url}")
+
     meta = {"url": url, "status": int(status), "headers": headers or {}}
     meta_hash = put_json(meta)
     body_hash = None
     if must_download and body is not None:
         body_hash = put_bytes(body)
-    return {"kind":"http","meta_hash":meta_hash, "body_hash":body_hash}
+    return {"kind":"http","meta_hash":meta_hash, "body_hash":body_hash, "url": url}
 
 def _pack_evidence_list(
     claims: List[Dict[str,Any]],
@@ -102,9 +105,6 @@ def _pack_evidence_list(
     policy: Dict[str,Any],
     http_fetcher=None
 ) -> Tuple[List[Dict[str,Any]], Dict[str,Any]]:
-    """
-    מחזיר (packed_evidence, map claim_id -> indices של evidence ארוז)
-    """
     packed: List[Dict[str,Any]] = []
     cmap: Dict[str,Any] = {}
     for c in claims:
@@ -122,6 +122,18 @@ def _pack_evidence_list(
             packed.append(pe)
     return packed, cmap
 
+def _apply_trust_and_consistency(claims: List[Dict[str,Any]], policy: Dict[str,Any]) -> None:
+    # אכיפת Trust למקור עבור כל claim
+    for c in claims:
+        enforce_trust_requirements(c, policy)
+
+    # אכיפת סכימות ו-Consistency בין טענות
+    validate_claims_and_consistency(
+        claims,
+        require_consistency_groups=bool(policy.get("require_consistency_groups", False)),
+        default_number_tolerance=float(policy.get("default_number_tolerance", 0.01))
+    )
+
 def ensure_proof_and_package(
     *,
     response_text: str,
@@ -130,29 +142,35 @@ def ensure_proof_and_package(
     http_fetcher=None
 ) -> Dict[str,Any]:
     """
-    אוכף:
-    - חובה claims (אם policy['require_claims_for_all_responses']=True)
-    - כל evidence תקין; HTTP מאומת; CAS hashes נשמרים
-    - חותך bundle הוכחות (proof) ושומר ל-CAS
-    מחזיר: {ok, proof_hash, proof, response_hash}
+    Gate מלא:
+      - מבנה טענות + קיום ראיות
+      - Trust tiers + מינ' מקורות/נק' אמון
+      - סכימות + הצלבת ערכים בקבוצות עקביות
+      - אימות HTTP (דומיין/סטטוס/רעננות/הורדה-אופציונלית)
+      - אריזת Evidence ל-CAS + Audit
     """
+    # 1) מבנה/חובה
     if bool(policy.get("require_claims_for_all_responses", True)):
         _validate_claims_structure(claims)
-    else:
-        # אם לא מחייבים claims — נאפשר תשובה גם בלעדיהם
-        if not claims:
-            # בכל זאת נארוז חבילת הוכחות ריקה
-            bundle = {"version":1,"claims":[], "evidence":[], "map":{}, "ts": _now_ts()}
-            proof_hash = put_json(bundle)
-            resp_hash = put_bytes(response_text.encode("utf-8"))
-            record_event("respond_proof_ok", {"claims":0,"evidence":0,"proof_hash":proof_hash,"response_hash":resp_hash}, severity="info")
-            return {"ok": True, "proof_hash": proof_hash, "proof": bundle, "response_hash": resp_hash}
+    elif not claims:
+        bundle = {"version":1,"claims":[], "evidence":[], "map":{}, "ts": _now_ts()}
+        proof_hash = put_json(bundle)
+        resp_hash = put_bytes(response_text.encode("utf-8"))
+        record_event("respond_proof_ok", {"claims":0,"evidence":0,"proof_hash":proof_hash,"response_hash":resp_hash}, severity="info")
+        return {"ok": True, "proof_hash": proof_hash, "proof": bundle, "response_hash": resp_hash}
 
+    # 2) Trust+Consistency+Schema
+    try:
+        _apply_trust_and_consistency(claims, policy)
+    except (TrustPolicyError, ConsistencyError) as e:
+        raise RespondBlocked(str(e))
+
+    # 3) אריזת ראיות + CAS
     packed, cmap = _pack_evidence_list(claims, policy=policy, http_fetcher=http_fetcher)
     bundle = {
         "version": 1,
         "ts": _now_ts(),
-        "claims": [{"id":c["id"], "text":c["text"]} for c in claims],
+        "claims": [{"id":c["id"], "text":c["text"], "schema": c.get("schema"), "value": c.get("value"), "group": c.get("consistency_group")} for c in claims],
         "evidence": packed,
         "map": cmap
     }
