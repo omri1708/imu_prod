@@ -2,20 +2,25 @@
 from __future__ import annotations
 import json, hashlib, time
 from typing import Dict, Any, Optional
+from contextlib import suppress
 
-from grounded.claims import current
-from engine.capability_wrap import guard_text_capability_for_user
-from synth.validators import validate_spec, validate_plan, validate_package
-from synth.generate_ab import generate_variants
-from synth.generate_ab_prior import generate_variants_with_prior
-from synth.generate_ab_explore import generate_variants_with_prior_and_explore
 from engine.ab_selector import select_best
 from engine.learn import learn_from_pipeline_result
 from engine.learn_store import load_baseline, _task_key, load_history
 from engine.config import load_config
-from user_model.intent import infer_intent
 from engine.explore_policy_ctx import decide_explore_ctx
 from engine.explore_state import mark_explore, mark_regression, clear_regression
+from engine.provenance_gate import enforce_evidence_gate, GateFailure
+from engine.capability_wrap import text_capability_for_user
+
+from synth.validators import validate_spec, validate_plan, validate_package
+from synth.generate_ab import generate_variants
+from synth.generate_ab_prior import generate_variants_with_prior
+from synth.generate_ab_explore import generate_variants_with_prior_and_explore
+from user_model.intent import infer_intent
+from grounded.claims import current
+
+
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -117,12 +122,26 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
     except Exception:
         # לא חוסם את הריצה; במקרה קצה שבו אין מידע — לא נסמן דבר
         pass
+    # --- אכיפת Evidence Gate ------
+    # אוסף הראיות: תומך גם במימושים שונים של current(): snapshot/drain
+    try:
+        evs = current().snapshot() if hasattr(current(), "snapshot") else (
+              current().drain()    if hasattr(current(), "drain")    else [])
+        min_trust = float(cfg.get("min_trust", 0.75))
+        gate = enforce_evidence_gate(evs, min_trust=min_trust)
+    except GateFailure as e:
+        # אפשרות "rollback": סמן רגרסיה/קול-דאון כדי להאט ניסויים עתידיים
+        with suppress(Exception):
+            cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
+            mark_regression(key, cooldown_s=cooldown_s)
+        # חוסם החזרה — אין RESPOND/Package בלי ראיות מספיקות
+        raise
 
     # --- אריזה ו־Guarded emit ---
     pkg = _package_text(spec, winner)
     async def _emit_text(_: Dict[str,Any]) -> str:
         return pkg["artifact_text"]
-    guarded = await guard_text_capability_for_user(_emit_text, user_id=user_id)
+    guarded = await text_capability_for_user(_emit_text, user_id=user_id)
     out = await guarded({"ok": True})
 
     if learn:
