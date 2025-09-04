@@ -1,13 +1,12 @@
 # imu_repo/ui/render.py
 from __future__ import annotations
-import html, json
-from typing import List, Dict, Any
+import html, json, hashlib
+from typing import List, Dict, Any, Tuple
 from grounded.claims import current
 from ui.dsl import Page, Component, validate_page
-from ui.forms import FormSchema, compile_schema_to_js
 
 CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-IMU_NONCE'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'"
-# Permissions-Policy בהעדפה לכותרת HTTP; כאן meta לצרכי סטטי
+
 def _perm_policy(permissions: Dict[str, bool]) -> str:
     def v(flag: bool): return "self" if flag else "()"
     return f"geolocation=({v(permissions.get('geolocation', False))}), microphone=({v(permissions.get('microphone', False))}), camera=({v(permissions.get('camera', False))})"
@@ -15,108 +14,9 @@ def _perm_policy(permissions: Dict[str, bool]) -> str:
 def _esc(s: str) -> str:
     return html.escape(s, quote=True)
 
-def _attrs(props: Dict[str,Any], include: List[str]) -> str:
-    out = []
-    for k in include:
-        if k in props:
-            out.append(f'{k}="{_esc(str(props[k]))}"')
-    return " ".join(out)
-
-def _render_markdown(md: str) -> str:
-    # מרנדר Markdown בסיסי (כותרות/פסקאות/קישורים) ללא JS
-    s = md.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-    lines = s.splitlines()
-    out = []
-    for ln in lines:
-        if ln.startswith("### "): out.append(f"<h3>{_esc(ln[4:])}</h3>")
-        elif ln.startswith("## "): out.append(f"<h2>{_esc(ln[3:])}</h2>")
-        elif ln.startswith("# "): out.append(f"<h1>{_esc(ln[2:])}</h1>")
-        else:
-            # קישורים [txt](url) — רק data:/self
-            ln2 = ln
-            # (פשטות: לא נכניס hrefs כאן; CSP מונע anyway)
-            out.append(f"<p>{ln2}</p>")
-    return "\n".join(out)
-
-def _render_component(c: Component, out: List[str], scripts: List[str], forms_js: List[str]):
-    k = c.kind
-    if k == "text":
-        t = _esc(c.props.get("text",""))
-        out.append(f'<p id="{_esc(c.id)}" class="imu-text">{t}</p>')
-    elif k == "input":
-        itype = _esc(c.props.get("type","text"))
-        ph = _esc(c.props.get("placeholder",""))
-        name = _esc(c.props.get("name", c.id))
-        out.append(f'<input id="{_esc(c.id)}" name="{name}" type="{itype}" placeholder="{ph}" class="imu-input" />')
-    elif k == "button":
-        label = _esc(c.props.get("label",""))
-        action = _esc(c.props.get("action",""))
-        out.append(f'<button id="{_esc(c.id)}" class="imu-btn" data-action="{action}">{label}</button>')
-    elif k == "list":
-        items = c.props.get("items",[])
-        out.append(f'<ul id="{_esc(c.id)}" class="imu-list">')
-        for it in items: out.append(f'  <li class="imu-li">{_esc(it)}</li>')
-        out.append('</ul>')
-    elif k == "image":
-        src = c.props.get("src","")
-        alt = _esc(c.props.get("alt",""))
-        out.append(f'<img id="{_esc(c.id)}" class="imu-img" alt="{alt}" src="{_esc(src)}" />')
-    elif k == "spacer":
-        h = int(c.props.get("h", 12))
-        out.append(f'<div id="{_esc(c.id)}" class="imu-spacer" style="height:{h}px"></div>')
-    elif k == "container":
-        out.append(f'<div id="{_esc(c.id)}" class="imu-container">')
-        for ch in c.children: _render_component(ch, out, scripts, forms_js)
-        out.append('</div>')
-    elif k == "markdown":
-        out.append(f'<section id="{_esc(c.id)}" class="imu-md">{_render_markdown(c.props.get("md",""))}</section>')
-    elif k == "select":
-        name = _esc(c.props.get("name", c.id))
-        out.append(f'<select id="{_esc(c.id)}" name="{name}" class="imu-select">')
-        for o in c.props.get("options", []):
-            if isinstance(o, str):
-                out.append(f'<option value="{_esc(o)}">{_esc(o)}</option>')
-            else:
-                val = _esc(str(o.get("value","")))
-                lab = _esc(str(o.get("label", val)))
-                out.append(f'<option value="{val}">{lab}</option>')
-        out.append('</select>')
-    elif k == "checkbox":
-        name = _esc(c.props.get("name", c.id))
-        lbl = _esc(c.props.get("label",""))
-        out.append(f'<label class="imu-check"><input id="{_esc(c.id)}" name="{name}" type="checkbox" /> {lbl}</label>')
-    elif k == "radio":
-        name = _esc(c.props.get("name"))
-        lbl = _esc(c.props.get("label",""))
-        val = _esc(c.props.get("value", c.id))
-        out.append(f'<label class="imu-radio"><input id="{_esc(c.id)}" name="{name}" type="radio" value="{val}" /> {lbl}</label>')
-    elif k == "table":
-        cols = c.props.get("columns",[])
-        rows = c.props.get("rows",[])
-        out.append(f'<table id="{_esc(c.id)}" class="imu-table"><thead><tr>')
-        for col in cols: out.append(f'<th>{_esc(col)}</th>')
-        out.append('</tr></thead><tbody>')
-        for r in rows:
-            out.append('<tr>')
-            for cell in r: out.append(f'<td>{_esc(str(cell))}</td>')
-            out.append('</tr>')
-        out.append('</tbody></table>')
-    elif k == "form":
-        # סכמת טופס
-        schema = FormSchema.from_dict(c.props.get("schema", {}))
-        js_fn = compile_schema_to_js(schema)
-        forms_js.append(js_fn)  # ייאוחד לבאנדל יחיד
-        submit_label = _esc(c.props.get("submit_label","Submit"))
-        out.append(f'<form id="{_esc(c.id)}" class="imu-form" data-imu-form="1">')
-        for ch in c.children: _render_component(ch, out, scripts, forms_js)
-        out.append(f'<div class="imu-form-actions"><button type="submit" class="imu-btn">{submit_label}</button></div>')
-        out.append('</form>')
-    else:
-        # לא יגיע בגלל validate_page
-        pass
-
 def _base_css() -> str:
     return """
+:root{--imu-gap:12px}
 .imu-root{max-width:960px;margin:0 auto;padding:16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,'Noto Sans',sans-serif;color:#222;background:#fff}
 .imu-text{margin:8px 0;line-height:1.5}
 .imu-input,.imu-select{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;margin:6px 0}
@@ -130,25 +30,24 @@ def _base_css() -> str:
 .imu-check,.imu-radio{display:block;margin:6px 0}
 .imu-table{border-collapse:collapse;width:100%;margin:8px 0}
 .imu-table th,.imu-table td{border:1px solid #ddd;padding:6px 8px}
-.imu-error{color:#b00020;font-size:0.9em;margin:4px 0}
+.imu-table th{user-select:none;cursor:pointer}
+.imu-table-controls{display:flex;gap:8px;align-items:center;margin:6px 0}
+.imu-badge{display:inline-block;padding:2px 6px;border-radius:10px;background:#eee;font-size:12px}
+.imu-grid{display:grid;grid-template-columns:repeat(var(--imu-cols,12),1fr);gap:var(--imu-gap,12px)}
 """
 
-def _base_js() -> str:
-    # אירועים/אימות/הרשאות דפדפן; ללא רשת/ספריות חיצוניות.
+def _forms_runtime_js() -> str:
+    # – מאמתי טפסים/הרשאות/חיישנים נשמרו כמו בשלב הקודם –
+    # + פונקציות מיון/סינון לטבלאות ו-Evidences לאינטראקציות
     return r"""
 (function(){
-  // Evidences in-page
   window.IMU_EVIDENCES = window.IMU_EVIDENCES || [];
-  function ev(kind, payload, trust){
-    try{ window.IMU_EVIDENCES.push({kind, payload, trust:(trust||0.9), ts: Date.now()}); }catch(e){}
-  }
+  function ev(kind, payload, trust){ try{ IMU_EVIDENCES.push({kind, payload, trust:(trust||0.9), ts: Date.now()}); }catch(e){} }
 
-  // Actions על כפתורים
   function fireAction(id, action){
     ev('ui_action', {id, action}, 0.92);
     const ce = new CustomEvent('imu:action', {detail:{id, action}});
     window.dispatchEvent(ce);
-    // הרצה מובנית: הרשאות וחיישנים
     if(action === 'perm:geolocation'){ requestGeo(); }
     if(action === 'sensor:geo'){ readGeo(); }
     if(action === 'perm:camera'){ requestMedia({video:true}); }
@@ -157,13 +56,9 @@ def _base_js() -> str:
 
   document.addEventListener('click', function(evnt){
     const btn = evnt.target.closest('button[data-action]');
-    if(btn){
-      evnt.preventDefault();
-      fireAction(btn.id, btn.getAttribute('data-action') || '');
-    }
+    if(btn){ evnt.preventDefault(); fireAction(btn.id, btn.getAttribute('data-action')||''); }
   }, true);
 
-  // קריאת טפסים עם מאמת סכמתי
   function hydrateForms(){
     const forms = document.querySelectorAll('form[data-imu-form="1"]');
     const validators = window.__IMU_FORM_VALIDATORS__ || [];
@@ -171,24 +66,18 @@ def _base_js() -> str:
       const validate = validators[idx] || (d => ({ok:true, errors:[]}));
       f.addEventListener('submit', function(e){
         e.preventDefault();
-        // איסוף ערכים
         const fd = {};
         f.querySelectorAll('input,select,textarea').forEach(function(el){
           if(el.type === 'checkbox') fd[el.name||el.id] = !!el.checked;
-          else if(el.type === 'radio'){
-            if(el.checked) fd[el.name||el.id] = el.value;
-          } else {
-            fd[el.name||el.id] = el.value;
-          }
+          else if(el.type === 'radio'){ if(el.checked) fd[el.name||el.id] = el.value; }
+          else { fd[el.name||el.id] = el.value; }
         });
         const res = validate(fd);
-        // נקה הודעות קודמות
         f.querySelectorAll('.imu-error').forEach(n => n.remove());
         if(!res.ok){
           res.errors.forEach(function(er){
             const anchor = f.querySelector('[name="'+er.field+'"],#'+er.field);
-            const msg = document.createElement('div'); msg.className='imu-error';
-            msg.textContent = (er.msg || 'invalid');
+            const msg = document.createElement('div'); msg.className='imu-error'; msg.textContent = (er.msg||'invalid');
             if(anchor && anchor.parentNode) anchor.parentNode.appendChild(msg);
           });
           ev('ui_form_reject', {form: f.id, errors: res.errors}, 0.7);
@@ -201,10 +90,8 @@ def _base_js() -> str:
     });
   }
 
-  // הרשאות/חיישנים — יעבדו בדפדפן אמיתי בלבד
   async function requestGeo(){
     try{
-      // רק בקשת הרשאה; הדפדפן יציג prompt
       if (!navigator.permissions || !navigator.permissions.query){ return; }
       const st = await navigator.permissions.query({name:'geolocation'});
       ev('perm_status', {perm:'geolocation', state: st.state}, 0.9);
@@ -226,24 +113,123 @@ def _base_js() -> str:
         ev('perm_error', {perm:'media', error:'mediaDevices.getUserMedia missing'}, 0.4); return;
       }
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      // לא מצרפים את ה-Stream לשום אלמנט כדי לשמור CSP; רק Evidence
       ev('perm_media_ok', {constraints: constraints}, 0.9);
       if (stream) stream.getTracks().forEach(t => t.stop());
     }catch(e){ ev('perm_media_error', {constraints, error:String(e)}, 0.4); }
   }
 
-  // חשיפה גלובלית מוגבלת
-  window.IMU = { fireAction, requestGeo, readGeo, requestMedia };
+  // ===== Table sort & filter =====
+  function enhanceTables(){
+    document.querySelectorAll('table[data-imu-table]').forEach(function(tbl){
+      const meta = JSON.parse(tbl.getAttribute('data-imu-table')||'{}');
+      const thead = tbl.tHead;
+      const tbody = tbl.tBodies[0];
+      if(!thead || !tbody) return;
+      const ncols = thead.rows[0].cells.length;
+      // Global filter UI
+      if(meta.filter){
+        const host = document.createElement('div'); host.className='imu-table-controls';
+        const inp = document.createElement('input'); inp.type='search'; inp.placeholder='Filter...'; inp.className='imu-input';
+        const badge = document.createElement('span'); badge.className='imu-badge'; badge.textContent='0 matches';
+        host.appendChild(inp); host.appendChild(badge);
+        tbl.parentNode.insertBefore(host, tbl);
+        inp.addEventListener('input', function(){
+          const q = inp.value.trim().toLowerCase();
+          let shown = 0;
+          [...tbody.rows].forEach(function(r){
+            const txt = [...r.cells].map(td => td.textContent.toLowerCase()).join(' ');
+            const ok = !q || txt.indexOf(q) >= 0;
+            r.style.display = ok? '' : 'none';
+            if(ok) shown++;
+          });
+          badge.textContent = shown + ' matches';
+          ev('ui_table_filter', {id: tbl.id, q, shown}, 0.88);
+        });
+      }
+      // Sort on header click
+      if(meta.sortable){
+        [...thead.rows[0].cells].forEach(function(th, idx){
+          let dir = 0; // 0 none, 1 asc, -1 desc
+          th.addEventListener('click', function(){
+            dir = (dir===1 ? -1 : 1);
+            const rows = [...tbody.rows];
+            rows.sort(function(a,b){
+              const av = (a.cells[idx]?.textContent||'').trim();
+              const bv = (b.cells[idx]?.textContent||'').trim();
+              const na = parseFloat(av), nb = parseFloat(bv);
+              const bothNum = isFinite(na) && isFinite(nb);
+              const cmp = bothNum ? (na-nb) : av.localeCompare(bv, undefined, {numeric:true,sensitivity:'base'});
+              return dir * (cmp<0? -1 : cmp>0? 1 : 0);
+            });
+            rows.forEach(r => tbody.appendChild(r));
+            ev('ui_table_sort', {id: tbl.id, col: idx, dir}, 0.9);
+          });
+        });
+      }
+    });
+  }
 
-  // hydrate forms אחרי טעינה
-  document.addEventListener('DOMContentLoaded', hydrateForms, false);
+  document.addEventListener('DOMContentLoaded', function(){
+    hydrateForms();
+    enhanceTables();
+  }, false);
+
+  // export
+  window.IMU = { fireAction, requestGeo, readGeo, requestMedia };
 })();
 """
+
+def _render_markdown(md: str) -> str:
+    s = md.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    out = []
+    for ln in s.splitlines():
+        if ln.startswith("### "): out.append(f"<h3>{_esc(ln[4:])}</h3>")
+        elif ln.startswith("## "): out.append(f"<h2>{_esc(ln[3:])}</h2>")
+        elif ln.startswith("# "): out.append(f"<h1>{_esc(ln[2:])}</h1>")
+        else: out.append(f"<p>{ln}</p>")
+    return "\n".join(out)
+
+def _collect_grid_css(page: Page) -> str:
+    """
+    יוצר CSS פר-קומפוננטה (ids) כדי לתמוך ב-span רספונסיבי לכל col.
+    """
+    rules: List[str] = []
+    # ברייקפוינטים ברירת מחדל:
+    def_bp = {"sm":480,"md":768,"lg":1024,"xl":1440}
+
+    def walk(c: Component, grid_ctx: Dict[str,Any]|None):
+        if c.kind == "grid":
+            cols = int(c.props.get("cols",12))
+            gap = int(c.props.get("gap",12))
+            bps = c.props.get("breakpoints", def_bp)
+            rules.append(f"#{_esc(c.id)}"+"{--imu-cols:"+str(cols)+";--imu-gap:"+str(gap)+"px}")
+            # המשך עם ההקשר
+            ctx = {"bps": bps}
+            for ch in c.children: walk(ch, ctx)
+            return
+        if c.kind == "col":
+            span = c.props.get("span", 12)
+            if isinstance(span, dict):
+                # בסיס: xs
+                xs = span.get("xs", span.get("sm", span.get("md", 12)))
+                rules.append(f"#{_esc(c.id)}"+"{grid-column:span "+str(int(xs))+"}")
+                # מדיה לכל bp
+                bps = (grid_ctx or {}).get("bps", def_bp)
+                for name, px in bps.items():
+                    if name in span:
+                        rules.append(f"@media (min-width:{int(px)}px){{#{_esc(c.id)}"+"{grid-column:span "+str(int(span[name]))+"}}}")
+            else:
+                rules.append(f"#{_esc(c.id)}"+"{grid-column:span "+str(int(span))+"}")
+        for ch in c.children:
+            walk(ch, grid_ctx)
+
+    for c in page.components:
+        walk(c, None)
+    return "\n".join(rules)
 
 def render_html(page: Page, *, nonce: str="IMU_NONCE") -> str:
     validate_page(page)
 
-    # Evidence: מבנה הדף
     comp_count = 0
     def count(c: Component):
         nonlocal comp_count
@@ -263,20 +249,103 @@ def render_html(page: Page, *, nonce: str="IMU_NONCE") -> str:
         '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
         f'  <title>{_esc(page.title)}</title>',
         f'  <style>{_base_css()}</style>',
+        f'  <style id="imu-grid-css">{_collect_grid_css(page)}</style>',
         '</head>','<body>','<main class="imu-root">'
     ]
     body: List[str] = []
-    scripts: List[str] = []
-    forms_js: List[str] = []
+    forms_js_bundle: List[str] = []
+
+    def render_comp(c: Component):
+        k = c.kind
+        if k == "text":
+            body.append(f'<p id="{_esc(c.id)}" class="imu-text">{_esc(c.props.get("text",""))}</p>')
+        elif k == "input":
+            itype = _esc(c.props.get("type","text"))
+            ph = _esc(c.props.get("placeholder",""))
+            name = _esc(c.props.get("name", c.id))
+            body.append(f'<input id="{_esc(c.id)}" name="{name}" type="{itype}" placeholder="{ph}" class="imu-input" />')
+        elif k == "button":
+            label = _esc(c.props.get("label",""))
+            action = _esc(c.props.get("action",""))
+            body.append(f'<button id="{_esc(c.id)}" class="imu-btn" data-action="{action}">{label}</button>')
+        elif k == "list":
+            items = c.props.get("items",[])
+            body.append(f'<ul id="{_esc(c.id)}" class="imu-list">')
+            for it in items: body.append(f'  <li class="imu-li">{_esc(it)}</li>')
+            body.append('</ul>')
+        elif k == "image":
+            src = c.props.get("src","")
+            alt = _esc(c.props.get("alt",""))
+            body.append(f'<img id="{_esc(c.id)}" class="imu-img" alt="{alt}" src="{_esc(src)}" />')
+        elif k == "spacer":
+            h = int(c.props.get("h", 12))
+            body.append(f'<div id="{_esc(c.id)}" class="imu-spacer" style="height:{h}px"></div>')
+        elif k == "container":
+            body.append(f'<div id="{_esc(c.id)}" class="imu-container">')
+            for ch in c.children: render_comp(ch)
+            body.append('</div>')
+        elif k == "markdown":
+            body.append(f'<section id="{_esc(c.id)}" class="imu-md">{_esc(_render_markdown(c.props.get("md","")))}</section>')
+        elif k == "select":
+            name = _esc(c.props.get("name", c.id))
+            body.append(f'<select id="{_esc(c.id)}" name="{name}" class="imu-select">')
+            for o in c.props.get("options", []):
+                if isinstance(o, str):
+                    body.append(f'<option value="{_esc(o)}">{_esc(o)}</option>')
+                else:
+                    val = _esc(str(o.get("value",""))); lab = _esc(str(o.get("label", val)))
+                    body.append(f'<option value="{val}">{lab}</option>')
+            body.append('</select>')
+        elif k == "checkbox":
+            name = _esc(c.props.get("name", c.id)); lbl = _esc(c.props.get("label",""))
+            body.append(f'<label class="imu-check"><input id="{_esc(c.id)}" name="{name}" type="checkbox" /> {lbl}</label>')
+        elif k == "radio":
+            name = _esc(c.props.get("name")); lbl = _esc(c.props.get("label","")); val = _esc(c.props.get("value", c.id))
+            body.append(f'<label class="imu-radio"><input id="{_esc(c.id)}" name="{name}" type="radio" value="{val}" /> {lbl}</label>')
+        elif k == "table":
+            cols = c.props.get("columns",[])
+            rows = c.props.get("rows",[])
+            meta = {"filter": bool(c.props.get("filter", False)), "sortable": bool(c.props.get("sortable", True))}
+            body.append(f'<table id="{_esc(c.id)}" class="imu-table" data-imu-table="{_esc(json.dumps(meta))}"><thead><tr>')
+            for col in cols: body.append(f'<th>{_esc(col)}</th>')
+            body.append('</tr></thead><tbody>')
+            for r in rows:
+                body.append('<tr>')
+                for cell in r: body.append(f'<td>{_esc(str(cell))}</td>')
+                body.append('</tr>')
+            body.append('</tbody></table>')
+            current().add_evidence("ui_table_render", {
+                "source_url":"imu://ui/table","trust":0.94,"ttl_s":600,
+                "payload":{"id": c.id, "rows": len(rows), "cols": len(cols), **meta}
+            })
+        elif k == "form":
+            from ui.forms import FormSchema, compile_schema_to_js
+            schema = FormSchema.from_dict(c.props.get("schema", {}))
+            js_fn = compile_schema_to_js(schema)
+            forms_js_bundle.append(js_fn)
+            body.append(f'<form id="{_esc(c.id)}" class="imu-form" data-imu-form="1">')
+            for ch in c.children: render_comp(ch)
+            submit_label = _esc(c.props.get("submit_label","Submit"))
+            body.append(f'<div class="imu-form-actions"><button type="submit" class="imu-btn">{submit_label}</button></div>')
+            body.append('</form>')
+        elif k == "grid":
+            body.append(f'<div id="{_esc(c.id)}" class="imu-grid">')
+            for ch in c.children: render_comp(ch)
+            body.append('</div>')
+        elif k == "col":
+            body.append(f'<div id="{_esc(c.id)}">')
+            for ch in c.children: render_comp(ch)
+            body.append('</div>')
+        else:
+            pass
 
     for comp in page.components:
-        _render_component(comp, body, scripts, forms_js)
+        render_comp(comp)
 
-    # רישום מאמתי טפסים כרשימה גלובלית שמורה
-    forms_bundle = "\n".join([f"( {js_fn} )" for js_fn in forms_js])
+    forms_bundle = "\n".join([f"( {js_fn} )" for js_fn in forms_js_bundle])
     tail = [
         '</main>',
-        f'<script nonce="{_esc(nonce)}">{_base_js()}</script>',
+        f'<script nonce="{_esc(nonce)}">{_forms_runtime_js()}</script>',
         f'<script nonce="{_esc(nonce)}">window.__IMU_FORM_VALIDATORS__ = [\n{forms_bundle}\n];</script>',
         '</body>','</html>'
     ]
