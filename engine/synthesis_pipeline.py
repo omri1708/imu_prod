@@ -5,9 +5,7 @@ from typing import Dict, Any, Optional
 
 from grounded.claims import current
 from engine.capability_wrap import guard_text_capability_for_user
-from synth.validators import (
-    validate_spec, validate_plan, validate_package
-)
+from synth.validators import validate_spec, validate_plan, validate_package
 from synth.generate_ab import generate_variants
 from synth.generate_ab_prior import generate_variants_with_prior
 from synth.generate_ab_explore import generate_variants_with_prior_and_explore
@@ -16,6 +14,7 @@ from engine.learn import learn_from_pipeline_result
 from engine.learn_store import load_baseline, _task_key, load_history
 from engine.config import load_config
 from engine.explore_policy import decide_explore
+from user_model.intent import infer_intent
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -31,11 +30,9 @@ def plan(spec: Dict[str,Any]) -> Dict[str,Any]:
     })
     if not ok:
         raise ValueError("invalid_spec")
-    steps = [
-        {"name":"generate_ab[prior/explore_fallback]"},
-        {"name":"ab_select"},
-        {"name":"package"},
-    ]
+    steps = [{"name":"generate_ab[prior/explore_fallback]"},
+             {"name":"ab_select_ctx_pareto"},
+             {"name":"package"}]
     plan_obj = {"steps": steps, "meta": {"created_at": time.time()}}
     current().add_evidence("plan", {
         "source_url": "local://plan",
@@ -78,40 +75,26 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
             variants = generate_variants_with_prior_and_explore(spec, baseline)
             current().add_evidence("generate_ab_prior_explore",{
                 "source_url":"local://generate_ab_prior_explore",
-                "trust":0.95,
-                "ttl_s":900,
-                "payload":{
-                    "labels":[v["label"] for v in variants],
-                    "epsilon": epsilon,
-                    "history_len": len(hist),
-                    "baseline_summary":{
-                        "label": baseline.get("label"),
-                        "phi": float(baseline.get("phi", float('inf'))),
-                        "p95_ms": float(baseline.get("p95_ms", float('inf'))),
-                        "error_rate": float(baseline.get("error_rate", 1.0))
-                    }
-                }
+                "trust":0.95,"ttl_s":900,
+                "payload":{"labels":[v["label"] for v in variants], "epsilon": epsilon, "history_len": len(hist)}
             })
         else:
             variants = generate_variants_with_prior(spec, baseline)
             current().add_evidence("generate_ab_prior",{
                 "source_url":"local://generate_ab_prior",
-                "trust":0.95,
-                "ttl_s":900,
+                "trust":0.95,"ttl_s":900,
                 "payload":{"labels":[v["label"] for v in variants]}
             })
     else:
         variants = generate_variants(spec)
         current().add_evidence("generate_ab",{
             "source_url":"local://generate_ab",
-            "trust":0.95,
-            "ttl_s":900,
+            "trust":0.95,"ttl_s":900,
             "payload":{"count": len(variants), "labels":[v["label"] for v in variants]}
         })
 
-    # ★ כאן ההתאמה האישית – A/B לפי Φ מרובה־יעדים עם משקולות מהפרופיל:
-    winner = select_best(variants, spec=spec, user_id=user_id)
-
+    intents = infer_intent(spec)
+    winner = select_best(variants, spec=spec, user_id=user_id, intents=intents)
     pkg = _package_text(spec, winner)
 
     async def _emit_text(_: Dict[str,Any]) -> str:
@@ -121,5 +104,4 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
 
     if learn:
         learn_from_pipeline_result(spec, winner, user_id=user_id)
-
     return out
