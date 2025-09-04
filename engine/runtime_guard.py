@@ -33,8 +33,7 @@ def check_runtime_table(
             fetcher=fetcher
         )
     except (RuntimeFetchError, RuntimePolicyError) as e:
-        raise RuntimeBlocked(f"runtime_fetch: {e}")
-
+        raise RuntimeBlocked(f"runtime_fetch[url={url}]: {e}")
     # בדיקות ערכים
     columns = table_spec.get("columns") or []
     filters = table_spec.get("filters")
@@ -47,12 +46,12 @@ def check_runtime_table(
             check_filters(r, columns, filters)
             checked += 1
         except RuntimeRowError as re:
-            raise RuntimeBlocked(f"runtime_row: {re}")
+            raise RuntimeBlocked(f"runtime_row[url={url}]: {re}")
 
     try:
         check_sort(rows, sort)
     except RuntimeRowError as re:
-        raise RuntimeBlocked(f"runtime_sort: {re}")
+        raise RuntimeBlocked(f"runtime_sort[url={url}]: {re}")
 
     # Lineage + Drift
     meta = {
@@ -63,12 +62,7 @@ def check_runtime_table(
         "sampled": len(rows)
     }
     rec = record_sample(url, raw, meta)  # שומר CAS+אינדוקס
-    last = get_last(url)  # אחרי השמירה — זה כבר האחרון. רק לצורך השוואת hash קודמת, נביא לפני?
-    # כדי להשוות אל "קודם", נחזיר את last שהיה לפני שמרנו:
-    # פתרון פשוט: נשמור קודם את הקודם:
-    # (בקוד הזה, record_sample כותב את החדש ואז get_last יחזיר החדש; לכן נשווה מול hash במטה־מידע אם הוזרק)
-    # כדי לא לשבור, נחשב hash של raw ונשווה מול "previous" שהחזקנו באיוונט-לוג אם יש. החלופה: לשמור לפני.
-    # DX: ננסה לאתר "previous" דרך audit האחרון:
+    last = get_last(url)  
     prev = None
     try:
         # engine.audit_log אולי כותב לאחרים; אם אין, נתעלם. (avoid hard dep)
@@ -76,8 +70,21 @@ def check_runtime_table(
     except Exception:
         prev = None
 
-    # השוואת hash באמצעות מטא־דאטה 'prev_hash' במדיניות (בדיקות/CI יכולים לספק), אחרת לא נוכל להשיג קודם.
+    # קביעת prev_hash: מדיניות גוברת; אחרת קובץ מקומי (אופציונלי)
     prev_hash = policy.get("prev_content_hash")
+    if not prev_hash:
+        state_dir = policy.get("runtime_state_dir")  # למשל: "runs/runtime_state"
+        if state_dir:
+            import os, json, hashlib
+            os.makedirs(state_dir, exist_ok=True)
+            safe = hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+            prev_f = os.path.join(state_dir, f"{safe}.json")
+            try:
+                if os.path.exists(prev_f):
+                    with open(prev_f, "r", encoding="utf-8") as fh:
+                        prev_hash = (json.load(fh) or {}).get("hash")
+            except Exception:
+                prev_hash = None
     changed = bool(prev_hash) and (prev_hash != rec["hash"])
 
     if not prev_hash:
@@ -89,8 +96,15 @@ def check_runtime_table(
                          {"url": url, "prev_hash": prev_hash, "new_hash": rec["hash"]},
                          severity="warn")
             if bool(policy.get("block_on_drift", False)):
-                raise RuntimeBlocked(f"runtime_drift: content_hash_changed {prev_hash} -> {rec['hash']}")
+                raise RuntimeBlocked(
+                    f"runtime_drift[url={url}]: content_hash_changed {prev_hash} -> {rec['hash']}"
+                )
         else:
             record_event("runtime_no_drift", {"url": url, "hash": rec["hash"]}, severity="info")
 
     return {"ok": True, "sampled": len(rows), "checked": checked, "hash": rec["hash"]}
+
+# TODO- הערה: כדי לחסום Drift
+#  כבר מהריצה השנייה ללא תלות חיצונית, אפשר לשמור לפני כתיבת הדגימה החדשה את “האחרון” ולהשוות — אבל בלי לשנות סמנטיקה, 
+# תמכנו כאן ב־policy.prev_content_hash (ב־CI/קנרי אפשר להזין את הבייסליין).
+#  אם תרצה — אעדכן לוגיקה ששומרת “previous.json” ומחזירה השוואה בתוך הפונקציה עצמה.

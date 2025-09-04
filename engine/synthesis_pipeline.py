@@ -1,7 +1,9 @@
 # imu_repo/engine/synthesis_pipeline.py
 from __future__ import annotations
+import time
 import json, hashlib, time
-from typing import Dict, Any, Optional
+from pathlib import Path    
+from typing import Dict, Any, Optional, List
 from contextlib import suppress
 
 from engine.ab_selector import select_best
@@ -24,7 +26,11 @@ from ui.package import build_ui_artifact
 from engine.audit_log import record_event
 from security.fingerprint_report import report_fingerprint
 from engine.rollout_guard import run_negative_suite, RolloutBlocked
-
+from engine.auto_remediation import diagnose, propose_remedies, apply_remedies
+from ui.schema_extract import extract_table_specs
+from ui.schema_compose import apply_table_specs
+from ui.render import render_html
+from engine.metrics.jsonl import append_jsonl
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -80,7 +86,7 @@ async def run_pipeline(
     
     p = plan(spec)
     cfg = load_config()
-    policy = PolicyEngine(cfg.get("policy"))
+    policy_engine = PolicyEngine(cfg.get("policy"))
     cfg_min_trust = float(cfg.get("min_trust", 0.75))
     domain = domain or cfg.get("domain")
     risk_hint = risk_hint or cfg.get("risk")
@@ -156,7 +162,7 @@ async def run_pipeline(
         gate_before = enforce_evidence_gate(
             evs_before,
             domain=domain, risk_hint=risk_hint,
-            policy_engine=policy, min_trust=cfg_min_trust
+            policy_engine=policy_engine, min_trust=cfg_min_trust
         )
         # למדיניות יכולה להיות min_trust דינמי:
         eff_min_trust = float(gate_before.get("policy", {}).get("min_trust", cfg_min_trust))
@@ -168,27 +174,79 @@ async def run_pipeline(
 
     # --- יצירת ארטיפקט טקסטי (מוסיף evidence "package") ---
     txt_pkg = _package_text(spec, winner) 
-    # --- Negative Guard לפני אריזה/חתימה (Safe-Progress) ---
+    # --- Negative Guard עם Auto-Remediation לפני חתימה/CAS ---
+    # אוספים ראיות מחדש כדי לכלול את ראיית ה-package:
+    evs_for_guard = _collect_evidence_preserving_buffer()
+    candidate_page = {
+        "title": spec.get("name", "artifact"),
+        "body": txt_pkg["artifact_text"],
+        "lang": txt_pkg.get("lang") or txt_pkg.get("language") or "text/plain",
+    }
+    policy_cfg = gate_before.get("policy") if isinstance(gate_before, dict) else (cfg.get("policy") or {})
+    runtime_fetcher = cfg.get("runtime_fetcher")  # אופציונלי למוקים/בדיקות
+
+    def _finalize_with_auto_remediation(page_obj: Dict[str,Any],
+                                        evidences: List[Dict[str,Any]],
+                                        policy: Dict[str,Any],
+                                        runtime_fetcher=None) -> Dict[str,Any]:
+        # מספר ניסיונות לפי מדיניות (דיפולט 3 אם auto_remediation.enabled=True)
+        auto = policy.get("auto_remediation", {}) or {}
+        attempts = int(auto.get("max_rounds", 3)) if bool(auto.get("enabled", True)) else 1
+        last_err: Exception | None = None
+        # אם יש לך DSL של טבלאות—נחזיק אותו כדי לאפשר רמדיז משנים (filters/required/sort)
+        table_specs = extract_table_specs(page_obj) or []
+        for i in range(1, attempts+1):
+            try:
+                res = run_negative_suite(page_obj, evidences, policy=policy, runtime_fetcher=runtime_fetcher)
+                record_event("finalize_guard_ok", {"attempt": i}, severity="info")
+                return res
+            except RolloutBlocked as rb:
+                last_err = rb
+                record_event("finalize_guard_blocked", {"attempt": i, "reason": str(rb)}, severity="warn")
+                if i >= attempts:
+                    break
+                # דיאגנוזה ורמדיז — על בסיס החריגה המקורית (אם מוצמדת) או ההודעה
+                root = rb.__cause__ or rb
+                diags = diagnose(root)
+                rems  = propose_remedies(diags, policy=policy, table_specs=table_specs)
+                if not rems:
+                    break
+                apply_remedies(rems, policy=policy, table_specs=table_specs)
+                record_event("auto_remediation_applied", {
+                    "attempt": i,
+                    "remedies": [r.description for r in rems]
+                }, severity="warn")
+                
+                continue
+        raise last_err if last_err else RuntimeError("guard_finalize_failed")
+
+    guard_res = _finalize_with_auto_remediation(
+        candidate_page, evs_for_guard, policy=policy_cfg, runtime_fetcher=runtime_fetcher
+    )
+    # שיקוף שינויים ל-UI (אם יש טבלאות בדף)
+    composer_mode = (cfg.get("composer") or {}).get("mode", "merge")  # או "overwrite"
+    table_specs = extract_table_specs(candidate_page) or []
+    if table_specs:
+        apply_table_specs(candidate_page, table_specs, mode=composer_mode)
+
     try:
-        # נרצה לכלול גם את הראיה של ה-package: אוספים שוב את הראיות
-        evs_for_guard = _collect_evidence_preserving_buffer()
-        candidate_page = {
-            "title": spec.get("name", "artifact"),
-            "body": txt_pkg["artifact_text"],
-            "lang": txt_pkg.get("lang") or txt_pkg.get("language") or "text/plain",
-        }
-        guard_res = run_negative_suite(candidate_page, evs_for_guard, policy=gate_before.get("policy"))
-        record_event("rollout_guard_pass", {
-            "checked": guard_res.get("checked"),
-            "sources": guard_res.get("sources"),
-            "agg_trust": guard_res.get("agg_trust"),
-        }, severity="info")
-    except RolloutBlocked as rb:
-        record_event("rollout_guard_block", {"reason": str(rb)}, severity="error")
-        with suppress(Exception):
-            cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
-            mark_regression(key, cooldown_s=cooldown_s)
-        raise
+        current().add_evidence("rollout_guard", {
+            "source_url": "local://rollout_guard",
+            "trust": 0.95, "ttl_s": 600,
+            "payload": {
+                "schema": guard_res.get("schema"),
+                "runtime": guard_res.get("runtime"),
+                "kpi": guard_res.get("kpi")
+            }
+        })
+    except Exception:
+        pass
+    
+    def assert_page_renderable(page_obj) -> None:
+        """יזרוק שגיאה אם page_obj לא בפורמט שה-render מקבל."""
+        _ = render_html(page_obj, nonce="CHECK") 
+    assert_page_renderable(candidate_page)
+
     # --- יצירת חבילה חתומה/CAS (אחרי שה-Guard עבר) --
     signed_pkg = build_ui_artifact(
         page=candidate_page,        
@@ -203,15 +261,15 @@ async def run_pipeline(
         record_event("artifact_built", {
             "domain": domain,
             "risk": risk_hint,
-            "manifest_sha": signed_pkg["manifest_sha"],
-            "artifact_sha": signed_pkg["artifact_sha"],
+            "manifest_sha": (signed_pkg.get("provenance") or {}).get("manifest_sha"),
+            "artifact_sha": (signed_pkg.get("provenance") or {}).get("artifact_sha"),
             "agg_trust": eff_min_trust
         }, severity="info")
 
     # אם מוגדר IMU_FINGERPRINT_URL ישלח HTTP; אחרת outbox לקובץ
     with suppress(Exception):
         report_fingerprint({"_type": "manifest_link",
-                            "manifest_sha": signed_pkg["manifest_sha"]})
+                            "manifest_sha": (signed_pkg.get("provenance") or {}).get("manifest_sha")})
     
     # --- Evidence Gate (2): אחרי החבילה (כולל הראיה של החבילה) ---
     try:
@@ -219,7 +277,7 @@ async def run_pipeline(
         gate_after = enforce_evidence_gate(
             evs_after,
             domain=domain, risk_hint=risk_hint,
-            policy_engine=policy, min_trust=eff_min_trust
+            policy_engine=policy_engine, min_trust=eff_min_trust
         )
     except GateFailure:
         with suppress(Exception):
@@ -238,4 +296,110 @@ async def run_pipeline(
 
     # החזרה מורחבת (אם ה-API שלך מאפשר):
     # אפשר להחזיר גם gate info ו-package חתום.
-    return {"ok": True, "text": out, "pkg": signed_pkg}
+
+    append_jsonl("/mnt/data/imu_repo/runs/_guard_metrics.jsonl", {
+    "ts": time.time(),
+    "runtime": guard_res.get("runtime"),
+    "kpi": guard_res.get("kpi"),
+    "schema": guard_res.get("schema"),
+})
+
+    return {"ok": True, "text": out, "pkg": signed_pkg, "guard": guard_res}
+
+
+
+
+# === Compatibility shim for tests that call finalize_with_auto_remediation(specs, ...) ===
+from typing import Optional
+from engine.runtime_guard import check_runtime_table, RuntimeBlocked
+from engine.kpi_regression import gate_from_files, KPIRegressionBlocked
+from engine.audit_log import record_event
+from engine.auto_remediation import diagnose, propose_remedies, apply_remedies
+
+DEFAULT_MAX_ATTEMPTS = 3  
+
+def finalize_with_auto_remediation(
+    table_specs: List[Dict[str, Any]],
+    *,
+    policy: Dict[str, Any],
+    runtime_fetcher=None
+) -> Dict[str, Any]:
+    """גרסת Slim: מריץ Runtime+KPI+Auto-Remediation ישירות על table_specs (לצרכי בדיקות)."""
+    attempts = int(policy.get("auto_max_attempts", DEFAULT_MAX_ATTEMPTS)) if bool(policy.get("auto_remediate_enabled", True)) else 1
+    last_error: Optional[Exception] = None
+
+    # 1) Runtime עם Auto-Remediation
+    if bool(policy.get("runtime_check_enabled", True)):
+        for spec in (table_specs or []):
+            rounds = 0
+            while True:
+                try:
+                    _ = check_runtime_table(spec, policy=policy, fetcher=runtime_fetcher)
+                    record_event("runtime_guard_pass", {"spec": spec.get("binding_url") or spec.get("path")}, severity="info")
+                    break
+                except RuntimeBlocked as rb:
+                    last_error = rb
+                    record_event("runtime_guard_block", {"reason": str(rb)}, severity="warn")
+                    if rounds >= attempts - 1:
+                        return {"ok": False, "attempt": rounds + 1}
+                    # אבחון ותיקון
+                    diags = diagnose(rb)
+                    rems = propose_remedies(diags, policy=policy, table_specs=table_specs)
+                    if not rems:
+                        return {"ok": False, "attempt": rounds + 1}
+                    apply_remedies(rems, policy=policy, table_specs=table_specs)
+                    record_event("auto_remediation_applied",
+                                 {"remedies": [r.description for r in rems], "round": rounds+1},
+                                 severity="warn")
+                    rounds += 1
+                    continue
+
+    # 2) KPI עם Auto-Remediation קלה (העלאת ספים לפי policy.auto_raise_limits)
+    base_path = policy.get("kpi_baseline_path")
+    cand_path = policy.get("kpi_candidate_path")
+    if base_path and cand_path:
+        rounds = 0
+        while True:
+            try:
+                _ = gate_from_files(base_path, cand_path, policy=policy)
+                record_event("kpi_regression_ok", {"baseline": base_path, "candidate": cand_path}, severity="info")
+                break
+            except KPIRegressionBlocked as kb:
+                last_error = kb
+                record_event("kpi_regression_block", {"reason": str(kb)}, severity="warn")
+                if rounds >= attempts - 1:
+                    return {"ok": False, "attempt": rounds + 1}
+                diags = diagnose(kb)
+                rems = propose_remedies(diags, policy=policy, table_specs=table_specs)
+                if not rems:
+                    return {"ok": False, "attempt": rounds + 1}
+                apply_remedies(rems, policy=policy, table_specs=table_specs)
+                record_event("auto_remediation_applied",
+                             {"scope": "kpi", "remedies": [r.description for r in rems], "round": rounds+1},
+                             severity="warn")
+                rounds += 1
+                continue
+
+    return {"ok": True, "attempt": attempts, "policy": policy, "table_specs": table_specs}
+
+
+
+
+
+
+
+#TODO- אם לא קורה:
+# imu_repo/ui/helpers.py
+# from __future__ import annotations
+# from ui.dsl import Page, Component
+# from ui.render import render_html  # לשימוש בבדיקת רנדר
+
+# def page_from_text(title: str, text: str) -> Page:
+#    return Page(
+#        title=title,
+#        components=[Component(kind="markdown", id="artifact_text", props={"md": text})]
+#    )
+
+#def assert_page_renderable(page_obj: Page) -> None:
+#    # יזרוק חריגה אם page_obj לא תקין ל-render
+#    _ = render_html(page_obj, nonce="CHECK")
