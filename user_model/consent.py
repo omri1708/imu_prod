@@ -3,21 +3,44 @@ from __future__ import annotations
 from typing import Dict, Any
 import os, json, time
 from user_model.identity import user_dir
+from privacy.storage import save_json_encrypted, load_json_encrypted
 
 CONSENT_FN = "consent.json"
+
+from __future__ import annotations
+from typing import Dict, Any
+
+
+DEFAULT = {
+    "analytics": False,
+    "personalization": True,
+    "cross_session_learning": True,
+    "share_evidence_external": False,
+}
+
+
+def set_consent(user_id: str, **flags) -> Dict[str, Any]:
+    m = dict(DEFAULT)
+    m.update({k: bool(v) for k,v in flags.items()})
+    save_json_encrypted(user_id, "consent", m, ttl_s=None)
+    return m
+
+
+def get_consent(user_id: str) -> Dict[str, Any]:
+    m = load_json_encrypted(user_id, "consent")
+    return dict(DEFAULT) if m is None else dict(m)
+
+def require(user_id: str, *, personalization: bool | None = None, cross_session: bool | None = None) -> None:
+    m = get_consent(user_id)
+    if personalization is True and not m.get("personalization", False):
+        raise PermissionError("personalization_not_allowed")
+    if cross_session is True and not m.get("cross_session_learning", False):
+        raise PermissionError("cross_session_learning_not_allowed")
+
 
 def _path(user_key: str) -> str:
     return os.path.join(user_dir(user_key), CONSENT_FN)
 
-def set_consent(user_key: str, purpose: str, *, granted: bool, ttl_s: int=365*24*3600, policy: str="v1") -> None:
-    p = _path(user_key)
-    try:
-        data = json.load(open(p,"r",encoding="utf-8"))
-    except Exception:
-        data = {}
-    data[purpose] = {"granted": bool(granted), "ts": time.time(), "ttl_s": int(ttl_s), "policy": policy}
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    json.dump(data, open(p,"w",encoding="utf-8"), ensure_ascii=False, indent=2)
 
 def revoke(user_key: str, purpose: str) -> None:
     p = _path(user_key)

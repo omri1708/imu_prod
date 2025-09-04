@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from grounded.provenance import STORE
 from grounded.provenance_confidence import normalize_and_sign
 from engine.config import load_config
+from engine.policy_ctx import get_user
 
 os.makedirs(STORE, exist_ok=True)
 
@@ -19,15 +20,18 @@ class _ClaimCtx:
         cfg = load_config()
         secret = str(cfg.get("evidence", {}).get("signing_secret", "imu_default_secret"))
         ev = normalize_and_sign(kind, info, signing_secret=secret)
+        # תיוג משתמש
+        uid = get_user() or "anon"
+        ev["user_id"] = uid
         self._evidences.append(ev)
-        # כתיבה לדיסק: קובץ קטן לכל ראיה (נוח לדיבאג/בדיקות)
+        # שמירת קובץ — מבודד בשם (כולל user)
         ts = ev.get("ts", time.time())
-        fn = os.path.join(STORE, f"{int(ts*1000)}_{kind}.json")
+        safe_kind = "".join(ch if ch.isalnum() else "_" for ch in kind)
+        fn = os.path.join(STORE, f"{int(ts*1000)}__{uid}__{safe_kind}.json")
         try:
             with open(fn, "w", encoding="utf-8") as f:
                 json.dump(ev, f, ensure_ascii=False)
         except Exception:
-            # לא חוסם; הראיה נשמרת בזיכרון גם אם דיסק נכשל
             pass
 
     def snapshot(self) -> List[Dict[str,Any]]:
