@@ -1,76 +1,40 @@
 # imu_repo/grounded/claims.py
 from __future__ import annotations
-from typing import Dict, Any, List, Tuple
-import threading, json
+import os, json, time
+from typing import Dict, Any, List, Optional
+from grounded.provenance import STORE
+from grounded.provenance_confidence import normalize_and_sign
+from engine.config import load_config
 
-from grounded.provenance_store import add_evidence
-from grounded.gate import require, GateDenied
+os.makedirs(STORE, exist_ok=True)
 
-_ctx_local = threading.local()
-
-
-class _Claims:
+class _ClaimCtx:
     def __init__(self) -> None:
-        self._buf: List[Tuple[str, Dict[str,Any]]] = []
+        self._evidences: List[Dict[str,Any]] = []
 
-    def add_evidence(self, key: str, ev: Dict[str,Any]) -> None:
-        if not isinstance(key, str): 
-            raise TypeError("key must be str")
-        if not isinstance(ev, dict):
-            raise TypeError("evidence must be dict")
-        self._buf.append((key, ev))
+    def reset(self) -> None:
+        self._evidences.clear()
 
-    def drain(self) -> List[Dict[str,Any]]:
-        out: List[Dict[str,Any]] = []
-        for k,e in self._buf:
-            out.append(dict(e, key=k))
-        self._buf.clear()
-        return out
+    def add_evidence(self, kind: str, info: Dict[str,Any]) -> None:
+        cfg = load_config()
+        secret = str(cfg.get("evidence", {}).get("signing_secret", "imu_default_secret"))
+        ev = normalize_and_sign(kind, info, signing_secret=secret)
+        self._evidences.append(ev)
+        # כתיבה לדיסק: קובץ קטן לכל ראיה (נוח לדיבאג/בדיקות)
+        ts = ev.get("ts", time.time())
+        fn = os.path.join(STORE, f"{int(ts*1000)}_{kind}.json")
+        try:
+            with open(fn, "w", encoding="utf-8") as f:
+                json.dump(ev, f, ensure_ascii=False)
+        except Exception:
+            # לא חוסם; הראיה נשמרת בזיכרון גם אם דיסק נכשל
+            pass
 
-_local = threading.local()
+    def snapshot(self) -> List[Dict[str,Any]]:
+        return list(self._evidences)
 
+# singleton
+_CTX = _ClaimCtx()
 
-def current() -> _Claims:
-    if not hasattr(_local, "ev"):
-        _local.ev = _Claims()
-    return _local.ev
-
-
-class ClaimsContext:
-    def __init__(self):
-        self._claims: List[Dict[str,Any]] = []
-
-    def add_evidence(self, content: bytes | str, meta: Dict[str,Any] | None=None, *,
-                     min_trust: float = 0.7) -> Dict[str,Any]:
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        dg = add_evidence(content, meta or {}, sign=True)
-        claim = {"digest": dg, "min_trust": float(min_trust)}
-        self._claims.append(claim)
-        return claim
-
-    def claims(self) -> List[Dict[str,Any]]:
-        return list(self._claims)
-
-    def clear(self) -> None:
-        self._claims.clear()
-
-def _current() -> ClaimsContext:
-    c = getattr(_ctx_local, "ctx", None)
-    if c is None:
-        c = ClaimsContext()
-        _ctx_local.ctx = c
-    return c
-
-def respond_with_evidence(text: str, *,
-                          require_hmac: bool=True,
-                          min_trust: float=0.7,
-                          max_age_s: int | None=None) -> Dict[str,Any]:
-    """
-    אוכף שקיימות ראיות תקפות בקונטקסט לפני "תשובה".
-    מחזיר {"text":..., "claims":[...]} אם עברו Gate.
-    """
-    claims = _current().claims()
-    checked = require(claims, require_hmac=require_hmac, min_trust=min_trust, max_age_s=max_age_s)
-    return {"text": text, "claims": checked}
-
+def current() -> _ClaimCtx:
+    return _CTX

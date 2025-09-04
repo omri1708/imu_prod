@@ -9,7 +9,7 @@ from grounded.evidence_store import EvidenceStore
 
 
 ROOT = "/mnt/data/imu_repo"
-STORE = os.path.join(ROOT, "evidence_store")
+STORE = "/mnt/data/imu_repo/.provenance"
 LOGS = os.path.join(ROOT, "logs")
 PROV_LOG = os.path.join(LOGS, "provenance.jsonl")
 
