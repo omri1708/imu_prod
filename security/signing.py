@@ -72,3 +72,13 @@ def verify_manifest(signed: Dict[str,Any]) -> None:
     expected = hmac.new(secret, data, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, sig.get("mac","")):
         raise SignError("bad HMAC")
+    
+class SignRequirementsError(SignError): ...
+REQUIRE_ED25519 = os.environ.get("IMU_REQUIRE_ED25519","0") == "1"
+
+def _require_ed25519_if_prod():
+    if REQUIRE_ED25519 and not ed25519_available():
+        raise SignRequirementsError("Ed25519 required (IMU_REQUIRE_ED25519=1) but pynacl not available")
+
+def sign_manifest(payload: Dict[str,Any], *, key_id: str="default") -> Dict[str,Any]:
+    _require_ed25519_if_prod()
