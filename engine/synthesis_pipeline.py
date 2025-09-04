@@ -13,7 +13,7 @@ from engine.config import load_config
 from engine.explore_policy_ctx import decide_explore_ctx
 from engine.explore_state import mark_explore, mark_regression, clear_regression
 from engine.provenance_gate import enforce_evidence_gate, GateFailure
-from engine.capability_wrap import text_capability_for_user
+from engine.pipeline_respond_hook import pipeline_respond
 
 from synth.validators import validate_spec, validate_plan, validate_package
 from synth.generate_ab import generate_variants
@@ -285,12 +285,29 @@ async def run_pipeline(
             mark_regression(key, cooldown_s=cooldown_s)
         raise
 
-    # --- Guarded emit (רק אחרי שני ה-Gates וה-Guard) --
-    async def _emit_text(_: Dict[str,Any]) -> str:
-        return txt_pkg["artifact_text"]
-    guarded = await text_capability_for_user(_emit_text, user_id=user_id)
-    out = await guarded({"ok": True})
-
+    # --- Respond Hook (אחרי Gate#2) ---
+    # בונים הקשר (ctx) עם כל המטא-דאטה הרלוונטי לתגובה
+    ctx: Dict[str, Any] = {
+        "__policy__": policy_cfg,                      # המדיניות האפקטיבית (כולל מפות drift, KPI וכו')
+        "user_id": user_id,
+        "domain": domain,
+        "risk_hint": risk_hint,
+        "task_key": key,
+        "spec": spec,
+        "guard": guard_res,                            # תוצאת ה-Negative Guard (general/schema/runtime/kpi)
+        "gate": {
+            "before": gate_before,
+            "after":  gate_after
+        },
+        "package": {
+            "sha256": signed_pkg.get("sha256"),
+            "provenance": signed_pkg.get("provenance", {}),
+            "manifest": signed_pkg.get("manifest", {})
+        }
+    }
+    # הפקת תשובה — agent_emit_answer יאכוף מדיניות/ראיות, ואם חסר – יחסום
+    resp = pipeline_respond(ctx=ctx, answer_text=txt_pkg["artifact_text"])
+    out = resp  # אם תרצה, תוכל לחלץ כאן שדות ספציפיים מה-Resp
     if learn:
          learn_from_pipeline_result(spec, winner, user_id=user_id)
 
@@ -318,8 +335,6 @@ async def run_pipeline(
             "after":  gate_after        # תוצאת Evidence Gate #2
         }
     }
-
-
 
 
 
