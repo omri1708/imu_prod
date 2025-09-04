@@ -10,6 +10,8 @@ from grounded.consistency import (
 from grounded.schema_consistency import (
     check_table_schema, SchemaError
 )
+from engine.runtime_guard import check_runtime_table, RuntimeBlocked
+from engine.audit_log import record_event
 
 class RolloutBlocked(Exception): ...
 
@@ -61,9 +63,70 @@ def run_negative_suite(
             )
         except SchemaError as e:
             raise RolloutBlocked(f"schema_error: {e}")
+    # 3) בדיקות Runtime (אופציונלי לפי policy) + Drift/Hash
+    runtime_checked = 0
+    runtime_sampled = 0
+    runtime_tables: List[Dict[str,Any]] = []
+    if bool(policy.get("runtime_check_enabled", True)):
+        # מפה אופציונלית של prev-hash פר טבלה (URL→hash)
+        prev_map = (
+            policy.get("runtime_prev_hash_map")
+            or policy.get("runtime_prev_hash")
+            or policy.get("prev_hash_map")
+            or {}
+        )
+        fetcher = policy.get("runtime_fetcher")
+        block_on_drift = bool(policy.get("block_on_drift", False))
 
+        for spec in table_specs:
+            table_id = spec.get("binding_url") or spec.get("path") or spec.get("name") or "<unknown>"
+            # Policy אפקטיבי פר-טבלה (כדי להזרים prev_content_hash מתאים)
+            eff_policy = dict(policy)
+            if isinstance(prev_map, dict) and table_id in prev_map:
+                eff_policy["prev_content_hash"] = prev_map[table_id]
+            eff_policy["block_on_drift"] = block_on_drift
+
+            try:
+                rrt = check_runtime_table(spec, policy=eff_policy, fetcher=fetcher)
+                runtime_checked += int(rrt.get("checked", 0))
+                runtime_sampled += int(rrt.get("sampled", 0))
+                # נחשב changed אם יש לנו prev_content_hash אפקטיבי
+                changed = None
+                if "prev_content_hash" in eff_policy and "hash" in rrt:
+                    changed = (eff_policy["prev_content_hash"] != rrt["hash"])
+                runtime_tables.append({
+                    "table": table_id,
+                    "hash": rrt.get("hash"),
+                    "sampled": rrt.get("sampled", 0),
+                    "checked": rrt.get("checked", 0),
+                    "changed": changed,
+                })
+                record_event(
+                    "runtime_guard_pass",
+                    {
+                        "table": table_id,
+                        "hash": rrt.get("hash"),
+                        "sampled": rrt.get("sampled"),
+                        "checked": rrt.get("checked"),
+                        "changed": changed,
+                    },
+                    severity="info",
+                )
+            except RuntimeBlocked as rb:
+                record_event(
+                    "runtime_guard_block",
+                    {"reason": str(rb), "table": table_id},
+                    severity="error",
+                )
+                # עצירת rollout; אם block_on_drift=True, ה־RuntimeBlocked כבר נזרק מתוך check_runtime_table
+                raise RolloutBlocked(f"runtime_error: {rb}")
     return {
         "ok": True,
         "general": res_general,
-        "tables_checked": len(table_specs)
+        "tables_checked": len(table_specs),
+        "runtime": {
+            "sampled": runtime_sampled,
+            "checked": runtime_checked,
+            "tables": runtime_tables,
+        },
     }
