@@ -13,8 +13,9 @@ from engine.ab_selector import select_best
 from engine.learn import learn_from_pipeline_result
 from engine.learn_store import load_baseline, _task_key, load_history
 from engine.config import load_config
-from engine.explore_policy import decide_explore
 from user_model.intent import infer_intent
+from engine.explore_policy_ctx import decide_explore_ctx
+from engine.explore_state import mark_explore, mark_regression, clear_regression
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -30,7 +31,7 @@ def plan(spec: Dict[str,Any]) -> Dict[str,Any]:
     })
     if not ok:
         raise ValueError("invalid_spec")
-    steps = [{"name":"generate_ab[prior/explore_fallback]"},
+    steps = [{"name":"generate_ab[prior/explore_ctx]"},
              {"name":"ab_select_ctx_pareto"},
              {"name":"package"}]
     plan_obj = {"steps": steps, "meta": {"created_at": time.time()}}
@@ -63,40 +64,62 @@ def _package_text(spec: Dict[str,Any], winner: Dict[str,Any]) -> Dict[str,Any]:
 async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False) -> Dict[str,Any]:
     p = plan(spec)
     cfg = load_config()
-    epsilon = float(cfg.get("explore", {}).get("epsilon", 0.0))
-
     key = _task_key(str(spec["name"]), str(spec["goal"]))
     baseline = load_baseline(key)
+    intents = infer_intent(spec)
+    hist = load_history(key, limit=500)
 
+    # --- בחירה אם לבצע Explore אדפטיבית ---
+    want_explore = False
     if baseline is not None:
-        hist = load_history(key, limit=500)
-        want_explore = decide_explore(len(hist), epsilon)
+        want_explore = decide_explore_ctx(key=key, intents=intents, history_len=len(hist), cfg=cfg)
+
+    # --- יצירת וריאנטים ---
+    if baseline is not None:
         if want_explore:
             variants = generate_variants_with_prior_and_explore(spec, baseline)
-            current().add_evidence("generate_ab_prior_explore",{
-                "source_url":"local://generate_ab_prior_explore",
+            mark_explore(key)
+            current().add_evidence("generate_ab_prior_explore_ctx",{
+                "source_url":"local://generate_ab_prior_explore_ctx",
                 "trust":0.95,"ttl_s":900,
-                "payload":{"labels":[v["label"] for v in variants], "epsilon": epsilon, "history_len": len(hist)}
+                "payload":{"labels":[v["label"] for v in variants], "intents": intents}
             })
         else:
             variants = generate_variants_with_prior(spec, baseline)
             current().add_evidence("generate_ab_prior",{
                 "source_url":"local://generate_ab_prior",
                 "trust":0.95,"ttl_s":900,
-                "payload":{"labels":[v["label"] for v in variants]}
+                "payload":{"labels":[v["label"] for v in variants], "intents": intents}
             })
     else:
         variants = generate_variants(spec)
-        current().add_evidence("generate_ab",{
-            "source_url":"local://generate_ab",
+        current().add_evidence("generate_ab_cold",{
+            "source_url":"local://generate_ab_cold",
             "trust":0.95,"ttl_s":900,
-            "payload":{"count": len(variants), "labels":[v["label"] for v in variants]}
+            "payload":{"count": len(variants), "labels":[v["label"] for v in variants], "intents": intents}
         })
 
-    intents = infer_intent(spec)
+    # --- בחירת מנצח (Φ+Pareto+Intent+User) ---
     winner = select_best(variants, spec=spec, user_id=user_id, intents=intents)
-    pkg = _package_text(spec, winner)
 
+    # --- סימון רגרסיה לצורך Cool-down ---
+    # אם יש baseline וכאשר הנבחר גרוע יותר (phi גבוה יותר) → רגרסיה = הפעלת cooldown
+    try:
+        phi_new = float(winner["info"]["phi"])
+        if baseline is not None:
+            base_phi = float(baseline.get("phi", float("inf")))
+            if phi_new > base_phi + 1e-9:
+                cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
+                mark_regression(key, cooldown_s=cooldown_s)
+            else:
+                # שיפור או שוויון → מפנה רגרסיות קודמות
+                clear_regression(key)
+    except Exception:
+        # לא חוסם את הריצה; במקרה קצה שבו אין מידע — לא נסמן דבר
+        pass
+
+    # --- אריזה ו־Guarded emit ---
+    pkg = _package_text(spec, winner)
     async def _emit_text(_: Dict[str,Any]) -> str:
         return pkg["artifact_text"]
     guarded = await guard_text_capability_for_user(_emit_text, user_id=user_id)
@@ -104,4 +127,5 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
 
     if learn:
         learn_from_pipeline_result(spec, winner, user_id=user_id)
+
     return out
