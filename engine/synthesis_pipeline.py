@@ -21,7 +21,8 @@ from user_model.intent import infer_intent
 from grounded.claims import current
 from policy.policy_engine import PolicyEngine
 from ui.package import build_ui_artifact
-
+from engine.audit_log import record_event
+from security.fingerprint_report import report_fingerprint
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -170,6 +171,21 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
         min_trust=eff_min_trust
     )
 
+    # --- Audit + Fingerprint (מיד אחרי יצירת החבילה) ---
+    with suppress(Exception):
+        record_event("artifact_built", {
+            "domain": domain,
+            "risk": risk_hint,
+            "manifest_sha": signed_pkg["manifest_sha"],
+            "artifact_sha": signed_pkg["artifact_sha"],
+            "agg_trust": eff_min_trust
+        }, severity="info")
+
+    # אם מוגדר IMU_FINGERPRINT_URL ישלח HTTP; אחרת outbox לקובץ
+    with suppress(Exception):
+        report_fingerprint({"_type": "manifest_link",
+                            "manifest_sha": signed_pkg["manifest_sha"]})
+    
     # --- Evidence Gate (2): אחרי החבילה (כולל הראיה של החבילה) ---
     try:
         evs_after = _collect_evidence_preserving_buffer()

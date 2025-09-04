@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from provenance.cas import CAS
 from security.signing import sign_manifest, verify_manifest
 from provenance.trust_registry import TrustRegistry
+from policy.freshness_profiles import get_profile
 
 class ProvenanceError(Exception): ...
 class TrustError(ProvenanceError): ...
@@ -12,17 +13,20 @@ class TrustError(ProvenanceError): ...
 def now_ts() -> int: return int(time.time())
 
 def normalize_evidence(ev: Dict[str,Any], tr: TrustRegistry) -> Dict[str,Any]:
+    kind = ev.get("kind","default")
+    prof = get_profile(kind)
     out = {
-        "kind": ev.get("kind","unknown"),
+        "kind": kind,
         "payload": ev.get("payload", {}),
         "source_url": ev.get("source_url",""),
         "ts": int(ev.get("ts", now_ts())),
-        "ttl_s": int(ev.get("ttl_s", 3600)),
+        # נצמד לתקרת הפרופיל
+        "ttl_s": int(min(int(ev.get("ttl_s", 3600)), int(prof["max_ttl_s"]))),
     }
     base_trust = float(ev.get("trust", tr.trust_for(out["source_url"])))
-    # דעיכה קלה בזמן (עד 0.2 בחודש):
+    # דעיכה לפי פרופיל
     age_s = max(0, now_ts() - out["ts"])
-    decay = min(0.2, age_s / (30*24*3600) * 0.2)
+    decay = min(0.99, (age_s / 86400.0) * float(prof["decay_per_day"]))
     out["trust"] = max(0.0, min(1.0, base_trust - decay))
     return out
 
@@ -48,7 +52,6 @@ class ProvenanceStore:
     def ingest_evidences(self, evidences: List[Dict[str,Any]]) -> str:
         norm = [normalize_evidence(e, self.registry) for e in evidences if not evidence_expired(e)]
         evdoc = {"_type":"evidences","items": norm, "agg_trust": aggregate_trust(norm), "ts": now_ts()}
-        # חתימת evidences manifest (שרשרת שלמה)
         signed_evs = sign_manifest(evdoc, key_id=os.environ.get("IMU_EVIDENCE_KEY","default"))
         sha_signed = self.cas.put(json.dumps(signed_evs, sort_keys=True).encode("utf-8"),
                                   kind="evidences+signature", mime="application/json")
@@ -57,7 +60,6 @@ class ProvenanceStore:
 
     def _load_signed_evidences(self, ev_sha: str) -> Dict[str,Any]:
         signed = json.loads(self.cas.get(ev_sha).decode("utf-8"))
-        # אימות חתימה על מסמך הראיות
         verify_manifest(signed)
         return signed["payload"]
 
@@ -73,7 +75,7 @@ class ProvenanceStore:
         manifest = {
             "artifact_sha256": blob_sha,
             "artifact_meta": meta,
-            "evidences_sha256": evidences_sha,  # מצביע למסמך ראיות חתום
+            "evidences_sha256": evidences_sha,
             "agg_trust": agg,
             "created_ts": now_ts()
         }

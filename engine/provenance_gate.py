@@ -1,13 +1,15 @@
 # imu_repo/engine/provenance_gate.py
 from __future__ import annotations
 from typing import List, Dict, Any
-from provenance.provenance import aggregate_trust, evidence_expired
-from policy.policy_engine import PolicyEngine
+from provenance.provenance import aggregate_trust, evidence_expired, now_ts
+from policy.freshness_profiles import get_profile
 from policy.policy_engine import PolicyEngine
 import os, json
 
 class GateFailure(Exception): ...
 
+def _count_sources(evs: List[Dict[str,Any]]) -> int:
+    return len({e.get("source_url","") for e in evs if e.get("source_url")})
 
 def _load_policy_from_disk() -> dict | None:
     p = os.environ.get("IMU_POLICY_PATH", "/mnt/data/.imu_policy.json")
@@ -18,28 +20,33 @@ def _load_policy_from_disk() -> dict | None:
             return None
     return None
 
-
-def _count_sources(evs: List[Dict[str,Any]]) -> int:
-    return len({e.get("source_url","") for e in evs if e.get("source_url")})
-
-def enforce_evidence_gate(evs, *, domain=None, risk_hint=None, policy_engine=None):
-    
+def enforce_evidence_gate(
+    evs: List[Dict[str,Any]],
+    *,
+    domain: str | None = None,
+    risk_hint: str | None = None,
+    policy_engine: PolicyEngine | None = None
+) -> Dict[str,Any]:
     pe = policy_engine or PolicyEngine(_load_policy_from_disk() or None)
-    pe = policy_engine or PolicyEngine()
-    pol = pe.resolve(domain, risk_hint)  # {min_trust, max_ttl_s, min_sources, freshness_decay}
+    pol = pe.resolve(domain, risk_hint)  # {min_trust, max_ttl_s, min_sources, ...}
     if not evs:
         raise GateFailure("no evidences present")
-    # הסר פגות־תוקף לפי max_ttl_s של המדיניות
+
     fresh = []
-    from provenance.provenance import now_ts
     for e in evs:
+        prof = get_profile(e.get("kind"))
+        # השתמש ב־min בין max_ttl_s של הפרופיל לבין מדיניות כללית
+        ttl_cap = min(int(e.get("ttl_s", 3600)), int(prof["max_ttl_s"]), int(pol["max_ttl_s"]))
         ts = int(e.get("ts", now_ts()))
-        ttl = int(e.get("ttl_s", 3600))
-        if now_ts() - ts > min(ttl, pol["max_ttl_s"]):
+        if now_ts() - ts > ttl_cap:
             continue
-        fresh.append(e)
+        e2 = dict(e)
+        e2["ttl_s"] = ttl_cap
+        fresh.append(e2)
+
     if not fresh:
-        raise GateFailure("all evidences expired by policy")
+        raise GateFailure("all evidences expired by policy/profile")
+
     agg = aggregate_trust(fresh)
     if agg < pol["min_trust"]:
         raise GateFailure(f"agg_trust {agg:.2f} < min_trust {pol['min_trust']:.2f}")
