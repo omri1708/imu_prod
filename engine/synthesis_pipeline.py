@@ -19,7 +19,8 @@ from synth.generate_ab_prior import generate_variants_with_prior
 from synth.generate_ab_explore import generate_variants_with_prior_and_explore
 from user_model.intent import infer_intent
 from grounded.claims import current
-
+from policy.policy_engine import PolicyEngine
+from ui.package import build_ui_artifact
 
 
 def _hash(obj: Any) -> str:
@@ -69,6 +70,10 @@ def _package_text(spec: Dict[str,Any], winner: Dict[str,Any]) -> Dict[str,Any]:
 async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False) -> Dict[str,Any]:
     p = plan(spec)
     cfg = load_config()
+    policy = PolicyEngine(cfg.get("policy"))
+    cfg_min_trust = float(cfg.get("min_trust", 0.75))
+    domain = cfg.get("domain")
+    risk_hint = cfg.get("risk")
     key = _task_key(str(spec["name"]), str(spec["goal"]))
     baseline = load_baseline(key)
     intents = infer_intent(spec)
@@ -122,29 +127,72 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
     except Exception:
         # לא חוסם את הריצה; במקרה קצה שבו אין מידע — לא נסמן דבר
         pass
-    # --- אכיפת Evidence Gate ------
-    # אוסף הראיות: תומך גם במימושים שונים של current(): snapshot/drain
+    # --- Evidence Gate (1): לפני אריזה/החזרה ---
+    def _collect_evidence_preserving_buffer():
+        c = current()
+        if hasattr(c, "snapshot"):
+            return c.snapshot()
+        if hasattr(c, "drain"):
+            evs = c.drain()
+            # נחזיר ל-buffer כדי שלא נאבד ראיות לשלב הבא
+            for ev in evs:
+                k = ev.get("key", "unknown"); d = dict(ev); d.pop("key", None)
+                c.add_evidence(k, d or {})
+            return evs
+        return []
+
     try:
-        evs = current().snapshot() if hasattr(current(), "snapshot") else (
-              current().drain()    if hasattr(current(), "drain")    else [])
-        min_trust = float(cfg.get("min_trust", 0.75))
-        gate = enforce_evidence_gate(evs, min_trust=min_trust)
-    except GateFailure as e:
-        # אפשרות "rollback": סמן רגרסיה/קול-דאון כדי להאט ניסויים עתידיים
+        evs_before = _collect_evidence_preserving_buffer()
+        gate_before = enforce_evidence_gate(
+            evs_before,
+            domain=domain, risk_hint=risk_hint,
+            policy_engine=policy, min_trust=cfg_min_trust
+        )
+        # למדיניות יכולה להיות min_trust דינמי:
+        eff_min_trust = float(gate_before.get("policy", {}).get("min_trust", cfg_min_trust))
+    except GateFailure:
         with suppress(Exception):
             cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
             mark_regression(key, cooldown_s=cooldown_s)
-        # חוסם החזרה — אין RESPOND/Package בלי ראיות מספיקות
         raise
 
-    # --- אריזה ו־Guarded emit ---
-    pkg = _package_text(spec, winner)
+    # --- יצירת חבילה חתומה/CAS (אפשר לשמר גם את הטקסטי לצורך evidence) ---
+    txt_pkg = _package_text(spec, winner)  # ממשיך להוסיף evidence "package" (sha וכו')
+    signed_pkg = build_ui_artifact(
+        page={
+            "title": spec.get("name", "artifact"),
+            "body": txt_pkg["artifact_text"],
+            "lang": txt_pkg.get("lang") or txt_pkg.get("language") or "text/plain",
+        },
+        nonce=cfg.get("nonce", "IMU_NONCE"),
+        key_id=cfg.get("signing_key", "default"),
+        cas_root=cfg.get("cas_root"),
+        min_trust=eff_min_trust
+    )
+
+    # --- Evidence Gate (2): אחרי החבילה (כולל הראיה של החבילה) ---
+    try:
+        evs_after = _collect_evidence_preserving_buffer()
+        gate_after = enforce_evidence_gate(
+            evs_after,
+            domain=domain, risk_hint=risk_hint,
+            policy_engine=policy, min_trust=eff_min_trust
+        )
+    except GateFailure:
+        with suppress(Exception):
+            cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
+            mark_regression(key, cooldown_s=cooldown_s)
+        raise
+
+    # --- Guarded emit (רק אחרי שני ה-Gates) ---
     async def _emit_text(_: Dict[str,Any]) -> str:
-        return pkg["artifact_text"]
+        return txt_pkg["artifact_text"]
     guarded = await text_capability_for_user(_emit_text, user_id=user_id)
     out = await guarded({"ok": True})
 
     if learn:
-        learn_from_pipeline_result(spec, winner, user_id=user_id)
+         learn_from_pipeline_result(spec, winner, user_id=user_id)
 
-    return out
+    # החזרה מורחבת (אם ה-API שלך מאפשר):
+    # אפשר להחזיר גם gate info ו-package חתום.
+    return {"ok": True, "text": out, "pkg": signed_pkg}

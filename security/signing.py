@@ -1,70 +1,74 @@
 # imu_repo/security/signing.py
 from __future__ import annotations
-import os, hmac, hashlib, json
-from typing import Dict, Any, Tuple
+import os, json, hmac, hashlib
+from typing import Dict, Any
+from security.ed25519_optional import ed25519_available, ed25519_sign, ed25519_verify
 
+KEYS_PATH = os.environ.get("IMU_KEYS_PATH", "/mnt/data/.imu_keys.json")
+# מבנה קובץ המפתחות (JSON):
+# {
+#   "default": {"alg":"HMAC", "secret":"hex..."},
+#   "prodKey": {"alg":"Ed25519", "pub":"hex...", "priv":"hex..."}
+# }
 
-_KEYS_FILE = os.environ.get("IMU_KEYS_PATH", os.path.expanduser("~/.imu_keys.json"))
+class SignError(Exception): ...
 
-class KeyStoreError(Exception): ...
-class VerifyError(Exception): ...
-
-def _load_keys() -> Dict[str,str]:
-    if not os.path.exists(_KEYS_FILE):
-        return {}
-    with open(_KEYS_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except Exception:
-            return {}
-
-def _save_keys(keys: Dict[str,str]) -> None:
-    os.makedirs(os.path.dirname(_KEYS_FILE), exist_ok=True)
-    tmp = _KEYS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(keys, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, _KEYS_FILE)
-
-def ensure_key(key_id: str="default") -> Tuple[str, bytes]:
-    keys = _load_keys()
-    if key_id not in keys:
-        # 32 bytes hex secret
+def _load_keys() -> Dict[str,Any]:
+    if not os.path.exists(KEYS_PATH):
+        # צור מפתח HMAC ברירת־מחדל אם אין קובץ.
         secret = os.urandom(32).hex()
-        keys[key_id] = secret
-        _save_keys(keys)
-    secret_hex = keys[key_id]
-    return key_id, bytes.fromhex(secret_hex)
+        doc = {"default": {"alg":"HMAC", "secret": secret}}
+        with open(KEYS_PATH, "w") as f: json.dump(doc, f, indent=2)
+        return doc
+    with open(KEYS_PATH, "r") as f: return json.load(f)
 
-def _canon(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",",":")).encode("utf-8")
+def _save_keys(doc: Dict[str,Any]) -> None:
+    tmp = KEYS_PATH + ".tmp"
+    with open(tmp, "w") as f: json.dump(doc, f, indent=2)
+    os.replace(tmp, KEYS_PATH)
 
-def sign_manifest(manifest: Dict[str, Any], *, key_id: str="default") -> Dict[str, Any]:
-    """
-    HMAC-SHA256 על ה-manifest הקנוני.
-    מוסיף שדות: signature.alg, signature.key_id, signature.mac
-    """
-    _, key = ensure_key(key_id)
-    body = {k: manifest[k] for k in manifest.keys()}  # shallow copy
-    mac = hmac.new(key, _canon(body), hashlib.sha256).hexdigest()
-    out = dict(body)
-    out["signature"] = {"alg":"HMAC-SHA256","key_id": key_id, "mac": mac}
-    return out
+def ensure_ed25519_key(key_id: str) -> None:
+    if not ed25519_available():
+        raise SignError("pynacl not available for Ed25519")
+    doc = _load_keys()
+    if key_id in doc and doc[key_id].get("alg") == "Ed25519":
+        return
+    # צור מפתח חדש
+    from security.ed25519_optional import ed25519_keygen
+    pub, priv = ed25519_keygen()
+    doc[key_id] = {"alg":"Ed25519", "pub":pub, "priv":priv}
+    _save_keys(doc)
 
-def verify_manifest(signed_manifest: Dict[str, Any]) -> None:
-    """
-    אם החתימה לא תואמת — זורק VerifyError
-    """
-    sig = signed_manifest.get("signature")
-    if not sig or not isinstance(sig, dict):
-        raise VerifyError("missing signature")
-    key_id = sig.get("key_id")
-    mac_got = sig.get("mac")
-    keys = _load_keys()
-    if key_id not in keys:
-        raise VerifyError(f"unknown key_id: {key_id}")
-    key = bytes.fromhex(keys[key_id])
-    body = dict(signed_manifest)
-    body.pop("signature", None)
-    mac_exp = hmac.new(key, _canon(body), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(mac_got, mac_exp):
-        raise VerifyError("bad signature")
+def sign_manifest(payload: Dict[str,Any], *, key_id: str="default") -> Dict[str,Any]:
+    doc = _load_keys()
+    key = doc.get(key_id) or doc["default"]
+    data = json.dumps(payload, sort_keys=True).encode("utf-8")
+    if key.get("alg") == "Ed25519":
+        sig = ed25519_sign(key["priv"], data)
+        return {"payload": payload, "signature": {"alg":"Ed25519","key_id":key_id,"sig":sig}}
+    # HMAC fallback
+    secret = bytes.fromhex(key.get("secret") or doc["default"]["secret"])
+    mac = hmac.new(secret, data, hashlib.sha256).hexdigest()
+    return {"payload": payload, "signature": {"alg":"HMAC-SHA256","key_id":key_id,"mac":mac}}
+
+def verify_manifest(signed: Dict[str,Any]) -> None:
+    sig = signed.get("signature") or {}
+    payload = signed.get("payload")
+    if payload is None: raise SignError("missing payload")
+    alg = sig.get("alg","")
+    key_id = sig.get("key_id","default")
+    data = json.dumps(payload, sort_keys=True).encode("utf-8")
+    doc = _load_keys()
+    key = doc.get(key_id) or doc.get("default")
+    if not key: raise SignError("key missing")
+    if alg == "Ed25519":
+        pub = key.get("pub")
+        if not pub: raise SignError("missing pub for Ed25519")
+        ok = ed25519_verify(pub, data, sig.get("sig",""))
+        if not ok: raise SignError("bad ed25519 signature")
+        return
+    # HMAC
+    secret = bytes.fromhex(key.get("secret") or doc["default"]["secret"])
+    expected = hmac.new(secret, data, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig.get("mac","")):
+        raise SignError("bad HMAC")
