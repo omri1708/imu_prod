@@ -23,6 +23,8 @@ from policy.policy_engine import PolicyEngine
 from ui.package import build_ui_artifact
 from engine.audit_log import record_event
 from security.fingerprint_report import report_fingerprint
+from engine.rollout_guard import run_negative_suite, RolloutBlocked
+
 
 def _hash(obj: Any) -> str:
     import hashlib, json as _json
@@ -68,13 +70,20 @@ def _package_text(spec: Dict[str,Any], winner: Dict[str,Any]) -> Dict[str,Any]:
         raise AssertionError("package_invalid")
     return artifact
 
-async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False) -> Dict[str,Any]:
+async def run_pipeline(
+    spec: Dict[str,Any], *,
+    user_id: str,
+    learn: bool = False,
+    domain: Optional[str] = None,
+    risk_hint: Optional[str] = None,
+) -> Dict[str,Any]:
+    
     p = plan(spec)
     cfg = load_config()
     policy = PolicyEngine(cfg.get("policy"))
     cfg_min_trust = float(cfg.get("min_trust", 0.75))
-    domain = cfg.get("domain")
-    risk_hint = cfg.get("risk")
+    domain = domain or cfg.get("domain")
+    risk_hint = risk_hint or cfg.get("risk")
     key = _task_key(str(spec["name"]), str(spec["goal"]))
     baseline = load_baseline(key)
     intents = infer_intent(spec)
@@ -157,14 +166,32 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
             mark_regression(key, cooldown_s=cooldown_s)
         raise
 
-    # --- יצירת חבילה חתומה/CAS (אפשר לשמר גם את הטקסטי לצורך evidence) ---
-    txt_pkg = _package_text(spec, winner)  # ממשיך להוסיף evidence "package" (sha וכו')
-    signed_pkg = build_ui_artifact(
-        page={
+    # --- יצירת ארטיפקט טקסטי (מוסיף evidence "package") ---
+    txt_pkg = _package_text(spec, winner) 
+    # --- Negative Guard לפני אריזה/חתימה (Safe-Progress) ---
+    try:
+        # נרצה לכלול גם את הראיה של ה-package: אוספים שוב את הראיות
+        evs_for_guard = _collect_evidence_preserving_buffer()
+        candidate_page = {
             "title": spec.get("name", "artifact"),
             "body": txt_pkg["artifact_text"],
             "lang": txt_pkg.get("lang") or txt_pkg.get("language") or "text/plain",
-        },
+        }
+        guard_res = run_negative_suite(candidate_page, evs_for_guard, policy=gate_before.get("policy"))
+        record_event("rollout_guard_pass", {
+            "checked": guard_res.get("checked"),
+            "sources": guard_res.get("sources"),
+            "agg_trust": guard_res.get("agg_trust"),
+        }, severity="info")
+    except RolloutBlocked as rb:
+        record_event("rollout_guard_block", {"reason": str(rb)}, severity="error")
+        with suppress(Exception):
+            cooldown_s = float(cfg.get("explore", {}).get("cooldown_s", 900.0))
+            mark_regression(key, cooldown_s=cooldown_s)
+        raise
+    # --- יצירת חבילה חתומה/CAS (אחרי שה-Guard עבר) --
+    signed_pkg = build_ui_artifact(
+        page=candidate_page,        
         nonce=cfg.get("nonce", "IMU_NONCE"),
         key_id=cfg.get("signing_key", "default"),
         cas_root=cfg.get("cas_root"),
@@ -200,7 +227,7 @@ async def run_pipeline(spec: Dict[str,Any], *, user_id: str, learn: bool = False
             mark_regression(key, cooldown_s=cooldown_s)
         raise
 
-    # --- Guarded emit (רק אחרי שני ה-Gates) ---
+    # --- Guarded emit (רק אחרי שני ה-Gates וה-Guard) --
     async def _emit_text(_: Dict[str,Any]) -> str:
         return txt_pkg["artifact_text"]
     guarded = await text_capability_for_user(_emit_text, user_id=user_id)

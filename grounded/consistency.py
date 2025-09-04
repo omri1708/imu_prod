@@ -5,6 +5,62 @@ import math
 
 from grounded.provenance import ProvenanceStore
 from grounded.contradiction_policy import policy_singleton as Policy, MetricRule
+from provenance.provenance import aggregate_trust, evidence_expired
+
+
+class ConsistencyError(Exception): ...
+class MissingEvidence(ConsistencyError): ...
+class ExpiredEvidence(ConsistencyError): ...
+class LowTrust(ConsistencyError): ...
+class NotEnoughSources(ConsistencyError): ...
+
+
+def _match_evidences_for_binding(evs: List[Dict[str,Any]], url: str) -> List[Dict[str,Any]]:
+    # התאמה לפי source_url; אם אין – נסה התאמות חלופיות (prefix בסיסי)
+    matches = [e for e in evs if e.get("source_url","") == url]
+    if matches: return matches
+    # פרפיקס (למשל https://api.example/ ↔ https://api.example/v1/..)
+    matches = [e for e in evs if url.startswith(str(e.get("source_url","")).rstrip("/"))]
+    return matches
+
+def check_ui_consistency(
+    ui_claims: List[Dict[str,Any]],
+    evidences: List[Dict[str,Any]],
+    *,
+    min_trust: float,
+    min_sources: int
+) -> Dict[str,Any]:
+    """
+    עבור כל claim של UI, דרוש לפחות מקור אחד שאינו פג-תוקף,
+    Aggregate trust ≥ min_trust, ומספר מקורות ייחודיים ≥ min_sources (ברמת כל ה־UI).
+    """
+    if not ui_claims:
+        return {"ok": True, "agg_trust": 1.0, "sources": 0, "checked": 0}
+
+    # אסוף התאמות
+    checked = 0
+    all_matched: List[Dict[str,Any]] = []
+    for c in ui_claims:
+        url = c.get("source_url","")
+        ms = _match_evidences_for_binding(evidences, url) if url else []
+        if not ms:
+            raise MissingEvidence(f"no evidence for binding {c.get('path')} -> {url}")
+        fresh = [e for e in ms if not evidence_expired(e)]
+        if not fresh:
+            raise ExpiredEvidence(f"all evidences expired for {c.get('path')} -> {url}")
+        all_matched.extend(fresh)
+        checked += 1
+
+    # מספר מקורות ייחודיים לכלל ה־UI
+    uniq_sources = len({e.get("source_url","") for e in all_matched})
+    if uniq_sources < int(min_sources):
+        raise NotEnoughSources(f"need >= {min_sources} distinct sources, got {uniq_sources}")
+
+    agg = aggregate_trust(all_matched)
+    if agg < float(min_trust):
+        raise LowTrust(f"agg_trust {agg:.2f} < min_trust {min_trust:.2f}")
+
+    return {"ok": True, "agg_trust": agg, "sources": uniq_sources, "checked": checked}
 
 def _extract_metrics(key: str, payload: Dict[str,Any]) -> Dict[str,float]:
     """
