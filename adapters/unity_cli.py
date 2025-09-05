@@ -1,5 +1,6 @@
 # adapters/unity_cli.py
 from __future__ import annotations
+import os, subprocess, shutil, time
 from .contracts.base import ResourceRequired, ProcessFailed, require_binary, run, sha256_file, BuildResult, ensure_dir, CAS_STORE
 from adapters.contracts.base import record_event
 from engine.progress import EMITTER
@@ -9,7 +10,7 @@ import os, subprocess, asyncio, shlex
 from typing import Dict, Any, AsyncIterator
 import os, subprocess, shlex, tempfile, json, time, hashlib
 from typing import Dict, List
-
+from engine.errors import ResourceRequired
 
 class ActionRequired(Exception):
     def __init__(self, what: str, how: str):
@@ -17,6 +18,55 @@ class ActionRequired(Exception):
 
 
 class UnityBuildError(Exception): pass
+
+
+def _find_unity():
+    candidates = [
+        "/Applications/Unity/Hub/Editor",                   # macOS Hub
+        os.path.expanduser("~/Applications/Unity/Hub/Editor"),
+        "C:\\Program Files\\Unity\\Hub\\Editor",            # Windows
+        "/opt/Unity/Editor"                                 # Linux
+    ]
+    for base in candidates:
+        if os.path.isdir(base):
+            # קח גרסה ראשונה
+            for v in os.listdir(base):
+                exe_mac = os.path.join(base, v, "Unity.app/Contents/MacOS/Unity")
+                exe_lin = os.path.join(base, v, "Editor/Unity")
+                exe_win = os.path.join(base, v, "Editor/Unity.exe")
+                for exe in (exe_mac, exe_lin, exe_win):
+                    if os.path.exists(exe): return exe
+    return shutil.which("Unity") or shutil.which("unity")
+
+
+def run_unity_build(payload:dict)->dict:
+    proj = payload.get("project_path","./unity_project")
+    out  = payload.get("output_path","./builds/Standalone")
+    target = payload.get("build_target","StandaloneWindows64")  # או Android/iOS וכו'
+    unity = _find_unity()
+    if not unity:
+        raise ResourceRequired("unity_cli",
+            "Unity Editor CLI not found. Install via Unity Hub and expose editor binary in PATH. "
+            "macOS: /Applications/Unity/Hub/Editor/<ver>/Unity.app/Contents/MacOS/Unity",
+            requires_consent=True)
+
+    os.makedirs(out, exist_ok=True)
+    cmd = [
+        unity, "-batchmode", "-quit",
+        "-projectPath", os.path.abspath(proj),
+        "-executeMethod", "BuildScript.PerformBuild",
+        "-buildTarget", target,
+        "-logFile", os.path.abspath("./_logs/unity_build.log")
+    ]
+    os.makedirs("./_logs", exist_ok=True)
+    t0=time.time()
+    sp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    dt=int((time.time()-t0)*1000)
+    if sp.returncode!=0:
+        raise RuntimeError(f"unity_build_failed rc={sp.returncode} out={sp.stdout[-4000:]}")
+    # נניח שנוצר ארטיפקט
+    return {"ok":True,"ms":dt,"target":target,"output_path":os.path.abspath(out)}
+
 
 def run_unity_headless(project_path: str, target: str, output_dir: str, unity_path: str="Unity"):
     """
@@ -50,7 +100,7 @@ def run_unity_headless(project_path: str, target: str, output_dir: str, unity_pa
     return arts
 
 
-async def run_unity_build(project_path: str, target: str="StandaloneLinux64") -> AsyncIterator[Dict[str,Any]]:
+async def _run_unity_build(project_path: str, target: str="StandaloneLinux64") -> AsyncIterator[Dict[str,Any]]:
     """
     מריץ Unity CLI ב-batchmode. דורש התקנת Unity (Hub/Editor) ונתיב 'unity' או 'Unity' ב-PATH.
     מפיק אירועי progress/timeline בזמן אמת.

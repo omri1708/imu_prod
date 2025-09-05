@@ -3,7 +3,8 @@ from __future__ import annotations
 import os, json, hashlib, time, stat, threading
 from typing import Optional, Dict, Any, Tuple, Iterable
 from dataclasses import dataclass, asdict
-
+from typing import Optional, Literal, Dict
+from policy.user_policies import ttl_for
 
 class CASError(Exception): ...
 class IntegrityError(CASError): ...
@@ -15,6 +16,69 @@ CAS_ROOT = os.environ.get("IMU_CAS_ROOT", ".imu_cas")
 
 os.makedirs(CAS_ROOT, exist_ok=True)
 
+
+Trust = Literal["low","medium","high","system"]
+
+@dataclass
+class CASMeta:
+    kind: str           # "evidence" | "artifact" | "ui" | "log" | ...
+    user_id: str
+    trust: Trust
+    created_ts: float
+    ttl_seconds: int
+    source_url: Optional[str] = None
+    signature: Optional[str] = None     # מקום לחתימה דיגיטלית
+    note: Optional[str] = None
+
+class ContentAddressableStore:
+    def __init__(self, root:str):
+        self.root = root
+        os.makedirs(root, exist_ok=True)
+
+    def _path(self, digest:str) -> str:
+        return os.path.join(self.root, digest[0:2], digest[2:4], digest)
+
+    def put_bytes(self, b:bytes, meta:CASMeta) -> str:
+        digest = hashlib.sha256(b).hexdigest()
+        p = self._path(digest)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if not os.path.exists(p):
+            with open(p, "wb") as f: f.write(b)
+        with open(p+".meta.json","w", encoding="utf-8") as f:
+            json.dump(asdict(meta), f, ensure_ascii=False, indent=2)
+        return digest
+
+    def get_bytes(self, digest:str) -> bytes:
+        with open(self._path(digest), "rb") as f:
+            return f.read()
+
+    def get_meta(self, digest:str) -> CASMeta:
+        with open(self._path(digest)+".meta.json","r", encoding="utf-8") as f:
+            d = json.load(f)
+        return CASMeta(**d)
+
+    def gc(self, now:Optional[float]=None) -> int:
+        """מוחק קבצים שפג תוקפם לפי ה-TTL של המדיניות בעת ההפקדה."""
+        now = now or time.time()
+        removed = 0
+        for dirpath, _dirnames, filenames in os.walk(self.root):
+            for fn in filenames:
+                if not fn.endswith(".meta.json"): 
+                    continue
+                meta_path = os.path.join(dirpath, fn)
+                with open(meta_path,"r", encoding="utf-8") as f:
+                    meta = CASMeta(**json.load(f))
+                expiry = meta.created_ts + meta.ttl_seconds
+                if now >= expiry:
+                    blob_path = meta_path[:-10]
+                    for path in (blob_path, meta_path):
+                        if os.path.exists(path):
+                            os.remove(path); removed += 1
+        return removed
+
+CAS = ContentAddressableStore(root=os.getenv("IMU_CAS_ROOT","./.imu_cas"))
+
+#=======old
 @dataclass
 class EvidenceMeta:
     source: str                    # URL/Path/Adapter
@@ -81,7 +145,7 @@ def put_file(path: str, meta: Dict[str, Any]) -> str:
 def _sha256(data: bytes) -> str:
     h = hashlib.sha256(); h.update(data); return h.hexdigest()
 
-class CAS:
+class _CAS:
     """
     תוכן־כשמו (Content-Addressable Store) פשוט על הדיסק:
       • blobs/xx/sha256  — תכולה בינארית

@@ -5,6 +5,31 @@ from adapters.contracts.base import record_event
 from engine.progress import EMITTER
 from perf.measure import measure, JOB_PERF
 import os, tempfile, textwrap
+from engine.errors import ResourceRequired
+import os, shutil, subprocess, json, time
+
+def run_job(payload:dict)->dict:
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        raise ResourceRequired("cuda_toolkit",
+            "NVIDIA CUDA Toolkit required (nvcc). Install from NVIDIA site.", True)
+    src = payload.get("code", r"""
+#include <stdio.h>
+__global__ void add(int *a, int *b, int *c){ c[blockIdx.x] = a[blockIdx.x] + b[blockIdx.x]; }
+int main(){ int a[1]={1}, b[1]={2}, c[1]={0}; int *d_a,*d_b,*d_c; 
+cudaMalloc((void**)&d_a, sizeof(int)); cudaMalloc((void**)&d_b,sizeof(int)); cudaMalloc((void**)&d_c,sizeof(int));
+cudaMemcpy(d_a,a,sizeof(int),cudaMemcpyHostToDevice); cudaMemcpy(d_b,b,sizeof(int),cudaMemcpyHostToDevice);
+add<<<1,1>>>(d_a,d_b,d_c); cudaMemcpy(c,d_c,sizeof(int),cudaMemcpyDeviceToHost);
+printf("%d\n", c[0]); return 0; }
+""")
+    with open("./cuda_job.cu","w") as f: f.write(src)
+    t0=time.time()
+    c = subprocess.run([nvcc, "./cuda_job.cu", "-o","./cuda_job"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if c.returncode!=0: raise RuntimeError(c.stdout[-4000:])
+    r = subprocess.run(["./cuda_job"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    dt=int((time.time()-t0)*1000)
+    return {"ok":True,"ms":dt,"stdout":r.stdout.strip()}
+
 
 def run_cuda_kernel(code: str, kernel: str, grid: tuple[int,int,int]=(1,1,1), block: tuple[int,int,int]=(1,1,1)) -> str:
     EMITTER.emit("timeline", {"phase":"cuda.prepare","kernel":kernel,"grid":grid,"block":block})

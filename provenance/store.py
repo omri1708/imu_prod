@@ -10,12 +10,64 @@ from typing import Optional, Dict
 from contracts.base import Artifact
 from typing import Dict, Any, Optional, Tuple
 import hashlib, json, os, time, threading
+
+
 class ResourceRequired(RuntimeError):
     def __init__(self, what:str, how:str):
         super().__init__(f"resource_required: {what}\nhow_to_provide: {how}")
         self.what=what; self.how=how
 
+CAS_ROOT = os.environ.get("IMU_CAS_ROOT","./_imu_cas")
+os.makedirs(CAS_ROOT, exist_ok=True)
 
+@dataclass
+class Evidence:
+    """רישום ראיה: hash, מקור, חותמת-זמן, רמת אמון [0..1], חתימה לוגית"""
+    algo: str         # 'sha256'
+    digest: str       # hex
+    source: str       # URL/file/“calc”
+    ts: float         # epoch
+    trust: float      # [0..1]
+    signature: str    # חתימת מקור/הפקה (לוגית: sha256(source+digest+ts))
+
+def sha256_bytes(b:bytes)->str: return hashlib.sha256(b).hexdigest()
+
+def sha256_file(path:str)->str:
+    h=hashlib.sha256()
+    with open(path,'rb') as f:
+        for chunk in iter(lambda: f.read(1<<20), b''): h.update(chunk)
+    return h.hexdigest()
+
+def _sign(source:str, digest:str, ts:float)->str:
+    return hashlib.sha256((source+digest+str(ts)).encode()).hexdigest()
+
+def cas_put_bytes(b:bytes)->str:
+    d = sha256_bytes(b)
+    p = os.path.join(CAS_ROOT, d)
+    if not os.path.exists(p):
+        with open(p,'wb') as f: f.write(b)
+    return d
+
+def cas_put_file(path:str)->str:
+    d = sha256_file(path)
+    dst = os.path.join(CAS_ROOT, d)
+    if not os.path.exists(dst):
+        with open(path,'rb') as src, open(dst,'wb') as out:
+            out.write(src.read())
+    return d
+
+def evidence_from_bytes(b:bytes, source:str, trust:float)->Evidence:
+    ts=time.time(); d=sha256_bytes(b)
+    return Evidence("sha256", d, source, ts, trust, _sign(source,d,ts))
+
+def evidence_from_file(path:str, source:str, trust:float)->Evidence:
+    ts=time.time(); d=sha256_file(path)
+    return Evidence("sha256", d, source, ts, trust, _sign(source,d,ts))
+
+def write_ledger(record:Dict, ledger_path:str="./_imu_cas/ledger.jsonl"):
+    os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+    with open(ledger_path,'a',encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False)+"\n")
 class ProvenanceStore:
     """
     Content-Addressable Store (CAS) + רמות אמון + TTL.
