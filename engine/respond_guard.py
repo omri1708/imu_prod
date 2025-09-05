@@ -165,7 +165,8 @@ def ensure_proof_and_package(
     response_text: str,
     claims: List[Dict[str,Any]],
     policy: Dict[str,Any],
-    http_fetcher=None
+    http_fetcher=None,
+    sign_key_id: str | None = None   # <<< חדש
 ) -> Dict[str,Any]:
     need_claims = bool(policy.get("require_claims_for_all_responses", True))
     if need_claims:
@@ -202,10 +203,10 @@ def ensure_proof_and_package(
     }
     # חתימת CAS אם מוגדר מפתח
     sk = policy.get("signing_keys") or {}
-    default_kid = next(iter(sk.keys()), None)
-    if default_kid:
-        meta = sk[default_kid]
-        sig = sign_manifest(bundle, key_id=default_kid, secret_hex=str(meta["secret_hex"]), algo=str(meta.get("algo","sha256")))
+    kid = sign_key_id or next(iter(sk.keys()), None)
+    if kid:
+        meta = sk[kid]
+        sig = sign_manifest(bundle, key_id=kid, secret_hex=str(meta["secret_hex"]), algo=str(meta.get("algo","sha256")))
         bundle["signature"] = sig
 
     proof_hash = put_json(bundle)

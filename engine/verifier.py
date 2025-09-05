@@ -1,31 +1,20 @@
 # imu_repo/engine/verifier.py
 from __future__ import annotations
-from typing import Dict, Any, List, Tuple
-from engine.cas_verify import verify_bundle_signature, CasVerifyError
+from typing import Dict, Any, List
+from engine.cas_verify import verify_bundle_signature
 from engine.consistency import validate_claims_and_consistency, ConsistencyError
 from engine.provenance import enforce_min_provenance, ProvenanceError
 from engine.trust_tiers import enforce_trust_requirements, TrustPolicyError
+from engine.key_delegation import expand_keyring_with_chain, DelegationError, enforce_scope_for_kid
 
 class VerificationFailed(Exception): ...
 
 def verify_bundle(bundle: Dict[str,Any], policy: Dict[str,Any], *, keyring: Dict[str,Dict[str,str]], http_fetcher=None) -> Dict[str,Any]:
-    """
-    מאמת:
-      1) חתימה
-      2) מבנה טענות
-      3) Trust / Provenance
-      4) עקביות מספרית/קבוצתית (לוקלית)
-      5) רענון evidences L3 (אם צריך)
-    """
-    # 1) חתימה
     if not verify_bundle_signature(bundle, keyring):
         raise VerificationFailed("CAS signature invalid")
-
     claims = bundle.get("claims") or []
     if not isinstance(claims, list):
         raise VerificationFailed("invalid claims array")
-
-    # 2/3/4
     try:
         validate_claims_and_consistency(
             claims,
@@ -34,8 +23,44 @@ def verify_bundle(bundle: Dict[str,Any], policy: Dict[str,Any], *, keyring: Dict
         )
         for c in claims:
             enforce_trust_requirements(c, policy)
-            enforce_min_provenance(c, policy, http_fetcher=http_fetcher)  # יבצע fetch אם צריך
+            enforce_min_provenance(c, policy, http_fetcher=http_fetcher)
     except (TrustPolicyError, ProvenanceError, ConsistencyError) as e:
         raise VerificationFailed(str(e))
-
     return {"ok": True, "claims": len(claims)}
+
+
+def verify_bundle_with_chain(bundle: Dict[str,Any], policy: Dict[str,Any], *, root_keyring: Dict[str,Dict[str,str]], trust_chain: List[Dict[str,Any]], http_fetcher=None, expected_scope: str | None=None) -> Dict[str,Any]:
+    try:
+        kr = expand_keyring_with_chain(root_keyring, trust_chain)
+    except DelegationError as e:
+        raise VerificationFailed(f"delegation error: {e}")
+    # אם הוגדר scope — ודא שהמפתח החותם מורשה
+    if expected_scope:
+        sig = bundle.get("signature") or {}
+        kid = sig.get("key_id")
+        if not kid:
+            raise VerificationFailed("missing key_id in signature")
+        try:
+            enforce_scope_for_kid(trust_chain, kid, expected_scope)
+        except DelegationError as e:
+            raise VerificationFailed(f"scope error: {e}")
+    return verify_bundle(bundle, policy, keyring=kr, http_fetcher=http_fetcher)
+
+# עטיפה לשימוש ב-quorum_verify
+def as_quorum_member(keyring: Dict[str,Dict[str,str]], *, http_fetcher=None):
+    def _fn(bundle: Dict[str,Any], policy: Dict[str,Any]) -> Dict[str,Any]:
+        try:
+            out = verify_bundle(bundle, policy, keyring=keyring, http_fetcher=http_fetcher)
+            return {"ok": True, **out}
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+    return _fn
+
+def as_quorum_member_with_chain(root_keyring: Dict[str,Dict[str,str]], trust_chain: List[Dict[str,Any]], *, http_fetcher=None, expected_scope: str | None=None):
+    def _fn(bundle: Dict[str,Any], policy: Dict[str,Any]) -> Dict[str,Any]:
+        try:
+            out = verify_bundle_with_chain(bundle, policy, root_keyring=root_keyring, trust_chain=trust_chain, http_fetcher=http_fetcher, expected_scope=expected_scope)
+            return {"ok": True, **out}
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+    return _fn
