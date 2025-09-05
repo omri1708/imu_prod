@@ -108,3 +108,111 @@ def compile_policy(domain_json: str) -> Dict[str,Any]:
     if "vio_rate"  in q: pol["quarantine_violation_rate_threshold"] = float(q["vio_rate"])
 
     return pol
+
+
+def _merge(a: Dict[str,Any], b: Dict[str,Any]) -> Dict[str,Any]:
+    out = dict(a)
+    for k,v in b.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def compile_with_profiles(base_json: str) -> Dict[str,Dict[str,Any]]:
+    """
+    מפיק שלושה פרופילים: dev, stage, prod מתוך בסיס אחד.
+    חוקיות:
+      - dev: ספי trust/provenance רכים, p95 רחב, quarantine כבוי.
+      - stage: ביניים, p95 בינוני, quarantine מופעל.
+      - prod: ספים קשיחים (trust גבוה, provenance ≥ L2/L3), p95 מחמיר, quarantine מלא.
+    """
+    base = compile_policy(base_json)
+
+    dev = _merge(base, {
+        "min_distinct_sources": max(1, int(base.get("min_distinct_sources",1)) - 1),
+        "min_total_trust": max(1, int(base.get("min_total_trust",1)) - 1),
+        "min_provenance_level": max(0, int(base.get("min_provenance_level",1)) - 1),
+        "require_consistency_groups": False,
+        "p95_window": 200,  # חלון קצר לבדיקות
+        "quarantine_min_calls": 10,
+        "quarantine_error_rate_threshold": 1.0,   # למעשה כבוי
+        "quarantine_violation_rate_threshold": 1.0
+    })
+
+    stage = _merge(base, {
+        "min_distinct_sources": max(2, int(base.get("min_distinct_sources",2))),
+        "min_total_trust": max(3, int(base.get("min_total_trust",3))),
+        "min_provenance_level": max(1, int(base.get("min_provenance_level",1))),
+        "require_consistency_groups": True,
+        "p95_window": int(base.get("p95_window", 500)),
+        "quarantine_error_rate_threshold": 0.3,
+        "quarantine_violation_rate_threshold": 0.1
+    })
+
+    prod = _merge(base, {
+        "min_distinct_sources": max(3, int(base.get("min_distinct_sources",2))+1),
+        "min_total_trust": max(5, int(base.get("min_total_trust",4))+1),
+        "min_provenance_level": max(2, int(base.get("min_provenance_level",1))+1),
+        "require_consistency_groups": True,
+        "p95_window": max(1000, int(base.get("p95_window", 500))*2),
+        "quarantine_error_rate_threshold": 0.2,
+        "quarantine_violation_rate_threshold": 0.05
+    })
+
+    return {"dev": dev, "stage": stage, "prod": prod}
+
+
+def policy_passes(pol: Dict[str,Any]) -> Dict[str,Any]:
+    """
+    'passes' פשוטים שמעשירים מדיניות קיימת:
+      - דרוג אוטומטי ל־latency/error claims.
+      - קיבוע max_points_per_source אם חסר.
+    """
+    out = dict(pol)
+    if "max_points_per_source" not in out:
+        out["max_points_per_source"] = 5
+    # אם אין min_provenance_by_type — נקבע לטענות latency≥L2
+    mbt = out.get("min_provenance_by_type") or {}
+    if "latency" not in mbt:
+        mbt["latency"] = max(2, int(out.get("min_provenance_level",1)))
+    out["min_provenance_by_type"] = mbt
+    return out
+
+STRICT_BUMPS = {
+    "min_distinct_sources": 4,
+    "min_total_trust": 8,
+    "min_provenance_level": 3,  # דורש רעננות L3
+    "require_consistency_groups": True,
+    "p95_window": 2000,
+    "quarantine_error_rate_threshold": 0.1,
+    "quarantine_violation_rate_threshold": 0.02,
+    "require_claims_for_all_responses": True,
+    "default_number_tolerance": 0.005
+}
+
+def strict_prod_from(base_json: str) -> Dict[str,Any]:
+    base = compile_policy(base_json)
+    # טריקים של hardening
+    base.setdefault("min_points_per_claim", 1.0)
+    base.setdefault("max_points_per_source", 5)
+    out = dict(base)
+    for k,v in STRICT_BUMPS.items():
+        out[k] = v
+    # דוגמה ל־per-type:
+    mbt = out.get("min_provenance_by_type") or {}
+    mbt["latency"] = max(3, int(out["min_provenance_level"]))
+    mbt["kpi"] = max(3, int(out["min_provenance_level"]))
+    out["min_provenance_by_type"] = mbt
+    return out
+
+def keyring_from_policy(pol: Dict[str,Any]) -> Dict[str,Dict[str,str]]:
+    """
+    חילוץ keyring פשוט מהמדיניות עבור ה־verifier (צד הצרכן).
+    """
+    kr = {}
+    for kid, meta in (pol.get("signing_keys") or {}).items():
+        kr[kid] = {"secret_hex": str(meta["secret_hex"]), "algo": str(meta.get("algo","sha256"))}
+    return kr
+

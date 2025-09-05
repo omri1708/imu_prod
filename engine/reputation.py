@@ -48,3 +48,32 @@ class ReputationRegistry:
         s = self._decay(rec["score"], rec["ts"])
         s = max(-1.0, min(1.0, s - abs(weight)))
         self._rep[source_id] = {"score": s, "ts": self._now()}
+
+
+class Reputation:
+    """
+    רפיוטציה נורמלית סביב 1.0 (למשל 0.5..1.5).
+    אפשר להאכיל תצפיות שגיאה/הצלחה פר מקור ולהפיק factor.
+    """
+    def __init__(self, *, base: float=1.0, min_f: float=0.5, max_f: float=1.5):
+        self._base = float(base)
+        self._min = float(min_f)
+        self._max = float(max_f)
+        self._ok: Dict[str,int] = {}
+        self._bad: Dict[str,int] = {}
+
+    def observe(self, source_id: str, *, ok: bool) -> None:
+        if ok:
+            self._ok[source_id] = self._ok.get(source_id, 0) + 1
+        else:
+            self._bad[source_id] = self._bad.get(source_id, 0) + 1
+
+    def factor(self, source_id: str) -> float:
+        ok = self._ok.get(source_id, 0)
+        bad = self._bad.get(source_id, 0)
+        total = ok + bad
+        if total <= 0:
+            return self._base
+        score = (ok + 1.0) / (total + 2.0)  # smoothing
+        f = self._min + (self._max - self._min) * score
+        return max(self._min, min(self._max, f))

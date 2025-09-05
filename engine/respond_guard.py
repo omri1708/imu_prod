@@ -9,9 +9,34 @@ from engine.audit_log import record_event
 from engine.trust_tiers import enforce_trust_requirements, TrustPolicyError
 from engine.consistency import validate_claims_and_consistency, ConsistencyError
 from engine.provenance import enforce_min_provenance, ProvenanceError
+from engine.cas_sign import sign_manifest
+from engine.consistency_graph_weighted import WeightedConsistencyGraph, WeightedConsistencyError
 
 class RespondBlocked(Exception): ...
 
+
+def _weighted_consistency_if_requested(claims: List[Dict[str,Any]], policy: Dict[str,Any]) -> None:
+    gspec = policy.get("global_consistency")  # {"relations":[{"a":"modA:x","b":"modB:x","rel":"equal","tol_pct":0.05,"dominates":"a"}], "weights":{"modA:x":3.0,...}}
+    if not isinstance(gspec, dict):
+        return
+    rels = gspec.get("relations") or []
+    wmap = gspec.get("weights") or {}
+    if not isinstance(rels, list):
+        return
+    G = WeightedConsistencyGraph()
+    # נבנה אינדקס טענות לפי id מלא
+    idx = {c["id"]: c for c in claims if isinstance(c.get("id"), str)}
+    for cid, c in idx.items():
+        w = float(wmap.get(cid, 1.0))
+        G.add_claim(cid, c, weight=w)
+    for r in rels:
+        a = r.get("a"); b = r.get("b"); rel = r.get("rel")
+        meta = dict(r); meta.pop("a",None); meta.pop("b",None); meta.pop("rel",None)
+        if isinstance(a,str) and isinstance(b,str) and isinstance(rel,str):
+            G.relate(a,b,rel, **meta)
+    G.check()
+
+    
 def _now_ts() -> float:
     return time.time()
 
@@ -142,7 +167,8 @@ def ensure_proof_and_package(
     policy: Dict[str,Any],
     http_fetcher=None
 ) -> Dict[str,Any]:
-    if bool(policy.get("require_claims_for_all_responses", True)):
+    need_claims = bool(policy.get("require_claims_for_all_responses", True))
+    if need_claims:
         _validate_claims_structure(claims)
     elif not claims:
         bundle = {"version":1,"claims":[], "evidence":[], "map":{}, "ts": time.time()}
@@ -152,7 +178,7 @@ def ensure_proof_and_package(
         return {"ok": True, "proof_hash": proof_hash, "proof": bundle, "response_hash": resp_hash}
 
     try:
-        # Trust + Consistency
+        # Trust + Consistency (מקומי)
         validate_claims_and_consistency(
             claims,
             require_consistency_groups=bool(policy.get("require_consistency_groups", False)),
@@ -161,18 +187,27 @@ def ensure_proof_and_package(
         for c in claims:
             enforce_trust_requirements(c, policy)
             enforce_min_provenance(c, policy)
-    except (TrustPolicyError, ConsistencyError, ProvenanceError) as e:
+        # Consistency גלובלי משוקלל (אם נדרש במדיניות)
+        _weighted_consistency_if_requested(claims, policy)
+    except (TrustPolicyError, ConsistencyError, ProvenanceError, WeightedConsistencyError) as e:
         raise RespondBlocked(str(e))
 
-    # אריזת ראיות ל-CAS
     packed, cmap = _pack_evidence_list(claims, policy=policy, http_fetcher=http_fetcher)
     bundle = {
-        "version": 2,
+        "version": 3,
         "ts": time.time(),
         "claims": [{"id":c["id"], "text":c["text"], "schema": c.get("schema"), "value": c.get("value"), "group": c.get("consistency_group"), "type": c.get("type")} for c in claims],
         "evidence": packed,
         "map": cmap
     }
+    # חתימת CAS אם מוגדר מפתח
+    sk = policy.get("signing_keys") or {}
+    default_kid = next(iter(sk.keys()), None)
+    if default_kid:
+        meta = sk[default_kid]
+        sig = sign_manifest(bundle, key_id=default_kid, secret_hex=str(meta["secret_hex"]), algo=str(meta.get("algo","sha256")))
+        bundle["signature"] = sig
+
     proof_hash = put_json(bundle)
     resp_hash = put_bytes(response_text.encode("utf-8"))
     record_event("respond_proof_ok", {
