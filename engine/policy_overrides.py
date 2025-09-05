@@ -79,3 +79,30 @@ def apply_user_overrides(base_policy: Dict[str,Any], user: Dict[str,Any]) -> Dic
     מחזיר policy ממוזג עם התאמות פר־משתמש/קונטקסט.
     """
     return deep_merge(base_policy or {}, overrides_for_user(user or {}))
+
+def apply_overrides(policy: Dict[str, Any], *, channel: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מחזיר policy עם התאמות לערוץ.
+    ערוצים: "batch", "interactive", "realtime"
+    """
+    p = dict(policy or {})
+    ch = channel.lower()
+    # ברירת מחדל — חוקים משותפים
+    p.setdefault("min_distinct_sources", 1)
+    p.setdefault("min_total_trust", 1.0)
+    sla = p.setdefault("perf_sla", {"latency_ms": {"p95_max": 200.0}})
+    if ch == "realtime":
+        # מחמירים ב-latency, שומרים על trust מינימלי
+        sla["latency_ms"] = {"p95_max": 120.0}
+        p["min_total_trust"] = max(p.get("min_total_trust", 1.0), 1.0)
+    elif ch == "interactive":
+        sla["latency_ms"] = {"p95_max": 250.0}
+    elif ch == "batch":
+        sla["latency_ms"] = {"p95_max": 5_000.0}
+
+    # התאמות פר־משתמש (אם קיימות)
+    user = (ctx or {}).get("user") or {}
+    if user.get("tier") == "strict":
+        p["min_distinct_sources"] = max(2, int(p.get("min_distinct_sources", 1)))
+        p["min_total_trust"] = max(2.0, float(p.get("min_total_trust", 1.0)))
+    return p

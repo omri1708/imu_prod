@@ -1,0 +1,27 @@
+<!-- imu_repo/ui/web/demo.html -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"/>
+<title>IMU Realtime UI</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; }
+  .tbl { border-collapse: collapse; width: 100%; }
+  .tbl th, .tbl td { border: 1px solid #ddd; padding: 6px 8px; }
+  .tbl th { background: #f5f7fb; cursor: pointer; }
+</style>
+<div>
+  <h2>Orders (stream)</h2>
+  <div id="orders_table"></div>
+</div>
+<script src="./client_widget.js"></script>
+<script>
+  const table = new IMUClient.TableWidget("orders_table","id");
+  const ws = IMUClient.connectWS("ws://127.0.0.1:9402/", {
+    minSources: 1, minTrust: 1.0,
+    onMsg: (doc)=>{
+      const ui = doc.bundle.ui || {};
+      if(ui.orders_table) table.apply(ui.orders_table);
+    }
+  });
+</script>
+</html>
