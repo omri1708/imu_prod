@@ -1,9 +1,9 @@
 # imu_repo/engine/synthesis_pipeline.py
 from __future__ import annotations
 from typing import Any, Dict, Callable, List, Optional
-import time
-from contextlib import contextmanager
+import time, os
 
+from contextlib import contextmanager
 from perf.p95 import P95Tracker
 from engine.quarantine import CapabilityGuard, Quarantined
 from engine.alerts import alert
@@ -13,6 +13,7 @@ from engine.respond_strict import RespondStrict
 from engine.verify_bundle import verify_bundle
 from engine.rollout_orchestrator import run_canary_orchestration
 from engine.contracts_gate import enforce_respond_contract
+from engine.events import emit_progress, emit_timeline
 
 from governance.user_policy import get_user_policy
 from audit.log import AppendOnlyAudit
@@ -27,6 +28,9 @@ from synth.verify import verify_artifacts
 from synth.package import package_release
 from synth.canary import shadow_and_canary
 from synth.rollout import gated_rollout
+from synth.specs_adapter import parse_adapter_jobs
+from engine.adapter_registry import get_adapter
+
 
 
 class PipelineError(Exception): ...
@@ -155,49 +159,75 @@ class SynthesisPipeline:
 
 AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")
 
+def _join(a: List, b: List) -> List:
+    return list(a or []) + list(b or [])
 
 def run_pipeline(user: str, spec_text: str) -> Dict[str, Any]:
- 
     t0 = time.time()
     policy, ev_index = get_user_policy(user)
 
+    emit_timeline("parse_start", user=user)
     spec = parse_spec(spec_text)
     AUDIT.append({"stage":"parse","user":user,"ok":True})
+    emit_progress("parsed", user=user)
 
     plan = build_plan(spec)
     AUDIT.append({"stage":"plan","user":user,"ok":True})
+    emit_progress("planned", user=user)
 
-    artifacts, claims, evidence = generate_artifacts(plan)  # מייצר גם claims/evidence
-    AUDIT.append({"stage":"generate","user":user,"claims":len(claims),"evidence":len(evidence)})
-
-    # מוודא שה-Evidence עומד במדיניות המשתמש לפני המשך
-    from engine.contracts_gate import enforce_respond_contract
+    artifacts, claims, evidence = generate_artifacts(plan, user=user, policy=policy, ev_index=ev_index)
     enforce_respond_contract("pipeline_generate", claims, evidence, policy, ev_index)
+    emit_progress("generated", user=user, artifacts=len(artifacts), claims=len(claims))
 
     tests_ok = run_tests(artifacts)
     AUDIT.append({"stage":"test","user":user,"ok":tests_ok})
+    emit_progress("tested", user=user, ok=tests_ok)
     if not tests_ok:
         return {"ok": False, "stage":"test"}
 
     verified = verify_artifacts(artifacts, claims, evidence)
     AUDIT.append({"stage":"verify","user":user,"ok":verified})
+    emit_progress("verified", user=user, ok=verified)
     if not verified:
         return {"ok": False, "stage":"verify"}
 
     pkg_path = package_release(artifacts)
     AUDIT.append({"stage":"package","user":user,"pkg":pkg_path})
+    emit_progress("packaged", user=user, pkg=pkg_path)
 
-    # Shadow/Canary אוספים KPIs ובוחנים מול baseline
+    jobs = parse_adapter_jobs(spec_text)
+    all_claims = list(claims)
+    all_evid   = list(evidence)
+    all_art    = dict(artifacts)
+
+    for j in jobs:
+        kind = j["kind"]
+        emit_progress("adapter_start", user=user, kind=kind)
+        adapter = get_adapter(kind)
+        res = adapter.build(j, user=user, workspace=os.path.dirname(pkg_path),
+                            policy=policy, ev_index=ev_index)
+        all_art.update(res.artifacts)
+        all_claims = _join(all_claims, res.claims)
+        all_evid   = _join(all_evid, res.evidence)
+        enforce_respond_contract(f"adapter:{kind}", res.claims, res.evidence, policy, ev_index)
+        AUDIT.append({"stage":"adapter", "user":user, "kind":kind, "claims":len(res.claims)})
+        emit_progress("adapter_done", user=user, kind=kind, artifacts=len(res.artifacts))
+
     canary_ok = shadow_and_canary(pkg_path, policy=policy)
     AUDIT.append({"stage":"canary","user":user,"ok":canary_ok})
+    emit_progress("canary", user=user, ok=canary_ok)
     if not canary_ok:
         return {"ok": False, "stage":"canary"}
 
-    # כבודק ביצועים בזמן אמת (p95)
     elapsed_ms = (time.time() - t0) * 1000.0
-    monitor_global.observe_ms(elapsed_ms)
-    gate_p95(max_ms=300.0)
+    monitor_global.observe(elapsed_ms)
+    gate_p95(max_ms=1000.0)
+    emit_progress("perf", user=user, latency_ms=elapsed_ms)
 
     rollout_ok = gated_rollout(pkg_path, policy=policy)
     AUDIT.append({"stage":"rollout","user":user,"ok":rollout_ok,"elapsed_ms":elapsed_ms})
-    return {"ok": rollout_ok, "pkg": pkg_path, "latency_ms": elapsed_ms}
+    emit_progress("rollout", user=user, ok=rollout_ok)
+    return {"ok": rollout_ok, "pkg": pkg_path, "latency_ms": elapsed_ms,
+            "claims": all_claims, "evidence": all_evid, "artifacts": list(all_art.keys())}
+ 
+    

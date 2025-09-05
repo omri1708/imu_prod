@@ -42,8 +42,25 @@ class _Hdr:
                 return 0.0
             idx = int(q * (len(self._vals)-1))
             return self._vals[idx]
+        
+class _Mon:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.samples = []
+
+    def observe(self, ms: float):
+        with self._lock:
+            self.samples.append(ms)
+            if len(self.samples) > 10000:
+                self.samples = self.samples[-5000:]
+
+    def p95(self) -> float:
+        with self._lock:
+            if not self.samples: return 0.0
+            xs = sorted(self.samples)
+            k = int(0.95 * (len(xs)-1))
+            return xs[k]
 
 
-monitor_global = _Hdr()
+monitor_global = _Mon
 
-monitor_global = PerfMonitor()

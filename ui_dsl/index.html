@@ -1,0 +1,25 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU UI</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+</head>
+<body>
+  <div class="imu-grid" data-areas='[["hdr","hdr"],["left","right"]]' data-cols="2fr 3fr" data-rows="auto auto">
+    <div class="imu-cell" data-area="hdr">
+      <h2>IMU – Live Progress & Timeline</h2>
+    </div>
+    <div class="imu-cell" data-area="left">
+      <div class="imu-progress" data-topic="progress" data-label="Build pipeline"></div>
+      <div class="imu-progress" data-topic="telemetry" data-label="System load"></div>
+    </div>
+    <div class="imu-cell" data-area="right">
+      <div class="imu-timeline" data-title="Pipeline events" data-topic="timeline"></div>
+    </div>
+  </div>
+  <script src="/static/runtime.js"></script>
+</body>
+</html>

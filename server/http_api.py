@@ -1,93 +1,94 @@
-# server/http_api.py 
-import json, base64
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
-from engine.respond import GroundedResponder
-from provenance.store import CASStore
-from realtime.integrations import push_progress, push_timeline, start_realtime 
+import json, threading, time, os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+from typing import Dict, Any
+from broker.stream import broker
+from governance.user_policy import get_user_policy
+from engine.pipeline_events import run_pipeline_spec
+from audit.log import AppendOnlyAudit
 
+AUDIT = AppendOnlyAudit("var/audit/http.jsonl")
 
-CAS_DIR = ".imu_cas"
-KEYS_DIR = ".imu_keys"
-responder = GroundedResponder(trust_threshold=0.6)
-cas = CASStore(CAS_DIR, KEYS_DIR)
+STATIC_ROOT = os.path.abspath("ui_dsl")
 
-def _j(s, code=200):
-    return (code, {"Content-Type":"application/json; charset=utf-8"}, json.dumps(s, ensure_ascii=False).encode("utf-8"))
+class Handler(BaseHTTPRequestHandler):
+    server_version = "IMU/1.0"
 
-class API(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            ln = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(ln) if ln>0 else b"{}"
-            body = json.loads(raw or "{}")
-        except Exception as e:
-            self._send(*_j({"ok":False,"error":f"bad_json:{e}"},400)); return
+    def _json(self, code: int, obj: Dict[str, Any]):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        path = urlparse(self.path).path
-        if path == "/api/cas/put":
-            b = base64.b64decode(body.get("bytes",""))
-            meta = cas.put_bytes(b, sign=True, url=body.get("url"), trust=float(body.get("trust",0.5)),
-                                 not_after_days=int(body.get("not_after_days",7)))
-            self._send(*_j({"ok":True,"sha256":meta.sha256,"url":meta.url,"trust":meta.trust})); return
-
-        if path == "/api/respond":
-            ctx = {"__claims__": body.get("claims", [])}
-            try:
-                out = responder.respond(ctx, body.get("text",""))
-            except Exception as e:
-                self._send(*_j({"ok":False,"error":str(e)},403)); return
-            self._send(*_j(out,200)); return
-
-        # פרסומי סטרים:
-        if path == "/api/progress/update":
-            # body: {"id":"build1","value": 37}
-            pid = str(body["id"]); val = int(body["value"])
-            start_realtime(f"progress/{pid}", {"value": val})
-            self._send(*_j({"ok":True})); return
-
-        if path == "/api/timeline/add":
-            # body: {"stream":"build","event":{"type":"info","ts":1690000000,"text":"..."}}
-            st = str(body.get("stream","main"))
-            ev = body.get("event",{})
-            start_realtime(f"timeline/{st}", {"event": ev})
-            self._send(*_j({"ok":True})); return
-
-        self._send(*_j({"ok":False,"error":"not_found"},404))
+    def _static(self, rel: str):
+        p = os.path.abspath(os.path.join(STATIC_ROOT, rel))
+        if not p.startswith(STATIC_ROOT) or not os.path.exists(p):
+            self.send_error(404); return
+        ct = "text/plain"
+        if p.endswith(".js"): ct = "application/javascript; charset=utf-8"
+        if p.endswith(".html"): ct = "text/html; charset=utf-8"
+        with open(p, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_GET(self):
-        path = urlparse(self.path).path
-        if path == "/":
-            html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>IMU RT</title></head>
-<body>
-<script>{open('ui_dsl/client_ws.js','r',encoding='utf-8').read()}</script>
-<h1>IMU Real-time</h1>
-<div id="app"></div>
-<script>
-window.IMU_WS_URL = "ws://"+location.hostname+":8766/ws";
-document.getElementById('app').innerHTML = `
-  <div>
-    <h3>Progress</h3>
-    {{}}
-    <h3>Timeline</h3>
-    {{}}
-  </div>`;
-</script>
-</body></html>"""
-            self._send(200, {"Content-Type":"text/html; charset=utf-8"}, html.encode("utf-8")); return
-        self._send(*_j({"ok":False,"error":"not_found"},404))
+        u = urlparse(self.path)
+        if u.path == "/events":
+            qs = parse_qs(u.query)
+            topic = qs.get("topic", ["events"])[0]
+            sub = broker.subscribe(topic, max_queue=2000)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            for chunk in broker.sse_iter(sub):
+                try:
+                    self.wfile.write(chunk); self.wfile.flush()
+                except Exception:
+                    break
+            return
+        if u.path.startswith("/static/"):
+            rel = u.path[len("/static/"):]
+            return self._static(rel)
+        if u.path == "/healthz":
+            return self._json(200, {"ok": True})
+        return self._json(404, {"error": "not_found"})
 
-    def _send(self, code, headers, data):
-        self.send_response(code)
-        for k,v in headers.items(): self.send_header(k,v)
-        self.end_headers(); self.wfile.write(data)
+    def do_POST(self):
+        u = urlparse(self.path)
+        cl = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(cl) if cl > 0 else b"{}"
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return self._json(400, {"error": "bad_json"})
+        if u.path == "/v1/pipeline/run":
+            user = req.get("user") or "anon"
+            spec_text = req.get("spec") or "{}"
+            policy, ev_index = get_user_policy(user)
+            AUDIT.append({"kind":"pipeline_run_req","user":user})
+            try:
+                run_id = run_pipeline_spec(user=user, spec_text=spec_text, policy=policy, ev_index=ev_index)
+                return self._json(200, {"ok": True, "run_id": run_id})
+            except Exception as e:
+                AUDIT.append({"kind":"pipeline_run_err","user":user,"err":str(e)})
+                return self._json(500, {"ok": False, "error": str(e)})
+        return self._json(404, {"error": "not_found"})
 
-def serve(host="127.0.0.1", port=8765, ws_host="127.0.0.1", ws_port=8766):
-    start_ws_broker(ws_host, ws_port)
-    httpd = HTTPServer((host, port), API)
-    print(f"[imu] http api on http://{host}:{port}")
-    httpd.serve_forever()
+def serve_http(host: str = "127.0.0.1", port: int = 8080):
+    srv = ThreadingHTTPServer((host, port), Handler)
+    t = threading.Thread(target=srv.serve_forever, name="http", daemon=True)
+    t.start()
+    return srv
 
 if __name__ == "__main__":
-    serve()
+    print("IMU HTTP listening on :8080")
+    serve_http("0.0.0.0", 8080)
+    while True: time.sleep(3600)

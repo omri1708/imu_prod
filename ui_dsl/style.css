@@ -1,0 +1,9 @@
+.imu-progress{ font: 14px/1.4 system-ui, sans-serif; margin: 8px 0 }
+.imu-progress__track{ background:#e5e7eb; border-radius:6px; height:12px; overflow:hidden }
+.imu-progress__fill{ height:12px; width:0%; background:#2563eb; transition: width .2s ease }
+.imu-progress__text{ margin-top:4px; color:#374151 }
+.imu-timeline{ font: 13px/1.5 system-ui, sans-serif; }
+.imu-timeline__title{ font-weight:600; margin:8px 0 }
+.imu-timeline__list{ list-style:none; padding:0; margin:0 }
+.imu-timeline__list li{ padding:4px 0; border-bottom:1px solid #eee }
+.imu-grid{ gap:12px }
