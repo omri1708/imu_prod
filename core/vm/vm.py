@@ -338,3 +338,16 @@ class VM:
 
         # אם לא בוצעה RESPOND מפורשת — נחזיר 204
         return code, body, ctx
+    
+def run_vm(program: list, ctx: dict) -> dict:
+    # ctx["__claims__"] נבנה מהוראות CLAIM/EVIDENCE בתוכנית
+    claims = []
+    # ... לולאת אופקודות ...
+    # דוגמה להוספת CLAIM:
+    # if op["op"] == "CLAIM": claims.append({"sha256": op["sha256"], "about": op.get("about")})
+    # if op["op"] == "EVIDENCE": claims.append({"sha256": op["sha256"], "trust": op.get("trust", 0.5)})
+    # בסיום:
+    ctx["__claims__"] = claims
+    return {"ok": True}
+
+#TODO

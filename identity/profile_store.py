@@ -65,7 +65,7 @@ class ProfileStore:
             return None
         d = json.loads(blob.decode("utf-8"))
         # TTL
-        if d.get("ttl_sec") and (time.time() - d.get("updated_ts", 0) > d["ttl_sec"]:
+        if d.get("ttl_sec") and (time.time() - d.get("updated_ts", 0)) > d["ttl_sec"]:
             # פג - מוחקים
             try: os.remove(path)
             except Exception: pass
