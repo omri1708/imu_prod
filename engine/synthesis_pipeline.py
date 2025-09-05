@@ -8,6 +8,10 @@ from perf.p95 import P95Tracker
 from engine.quarantine import CapabilityGuard, Quarantined
 from engine.alerts import alert
 from engine.reputation import ReputationRegistry
+from engine.policy_overrides import apply_user_overrides
+from engine.respond_strict import RespondStrict
+from engine.verify_bundle import verify_bundle
+from engine.rollout_orchestrator import run_canary_orchestration
 
 class PipelineError(Exception): ...
 
@@ -28,9 +32,10 @@ class SynthesisPipeline:
       - בידוד יכולות (quarantine)
       - Reputation כ-hook למדיניות (למשל ב-gates אחרים במערכת)
     """
-    def __init__(self, policy: Optional[Dict[str,Any]] = None, now=None):
-        self.policy = dict(policy or {})
+    def __init__(self, *, base_policy: Dict[str,Any], http_fetcher=None, sign_key_id: Optional[str]="root", now=None):
+        self.policy = dict(base_policy or {})
         self._now = now or (lambda: time.time())
+        self.responder = RespondStrict(base_policy=base_policy, http_fetcher=http_fetcher, sign_key_id=sign_key_id)
         self.trackers: Dict[str, P95Tracker] = {
             "plan": P95Tracker(window=int(self.policy.get("p95_window", 500))),
             "generate": P95Tracker(window=int(self.policy.get("p95_window", 500))),
@@ -42,6 +47,8 @@ class SynthesisPipeline:
         }
         self.guard = CapabilityGuard(now=self._now)
         self.reputation = self.policy.get("reputation")
+        
+        self.responder = RespondStrict(base_policy=base_policy, http_fetcher=http_fetcher, sign_key_id=sign_key_id)
         if self.reputation is None:
             self.reputation = ReputationRegistry()
             self.policy["reputation"] = self.reputation
@@ -97,3 +104,34 @@ class SynthesisPipeline:
             # SLO gate אחרי כל שלב
             self._slo_gate(step)
         return {"ok": True, "ctx": ctx, "p95": {k: v.p95() for k,v in self.trackers.items()}}
+
+    
+    def run_once(self,
+                *,
+                ctx: Dict[str,Any],
+                generate_fn: Callable[[Dict[str,Any]], tuple],
+                verifiers: List[Callable[[Dict[str,Any],Dict[str,Any]], Dict[str,Any]]],
+                rollout_stages: List[Dict[str,Any]],
+                expected_scope: str = "deploy",
+                k: int = 1,
+                autotune: bool = False,
+                get_stage_claims: Optional[Callable[[str,int], List[Dict[str,Any]]]] = None
+                ) -> Dict[str,Any]:
+        # 1) יצירה/סינתזה של תשובה+חבילה חתומה
+        out = self.responder.respond(ctx=ctx, generate=generate_fn)
+        bundle = out["bundle"]; eff_policy = out["policy"]
+
+        # 2) אימות bundle
+        vouts = [v(bundle, eff_policy) for v in verifiers]
+        oks = [vo.get("ok") for vo in vouts]
+        if not all(oks):
+            return {"ok": False, "stage":"verify", "errors": vouts}
+
+        # 3) rollout תזמורי + Consistency/Self-Heal (חובר בשלב 101)
+        roll = run_canary_orchestration(
+            bundle=bundle, policy=eff_policy, verifiers=verifiers, expected_scope=expected_scope,
+            k=k, stages=rollout_stages, get_stage_claims=get_stage_claims, autotune=autotune
+        )
+        if not roll.get("ok"):
+            return {"ok": False, "stage":"rollout", "details": roll}
+        return {"ok": True, "bundle": bundle, "rollout": roll, "text": out["text"], "policy": eff_policy}
