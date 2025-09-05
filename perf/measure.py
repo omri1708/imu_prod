@@ -2,7 +2,30 @@
 from __future__ import annotations
 import time, threading, http.client
 from typing import Dict, Any, List
-import statistics
+import time, statistics
+
+
+class PerfWindow:
+    def __init__(self, size: int = 200):
+        self.size=size; self.samples: List[float]=[]
+
+    def add(self, secs: float):
+        self.samples.append(secs); 
+        if len(self.samples) > self.size: self.samples.pop(0)
+
+    def snapshot(self) -> Dict[str, float]:
+        if not self.samples: return {"count":0, "p50":0.0, "p95":0.0, "avg":0.0}
+        s=sorted(self.samples); n=len(s)
+        p50=s[int(0.5*(n-1))]; p95=s[int(0.95*(n-1))]
+        return {"count": n, "p50": p50, "p95": p95, "avg": sum(s)/n}
+
+BUILD_PERF = PerfWindow()
+JOB_PERF   = PerfWindow()
+
+def measure(fn, *args, **kwargs):
+    t0=time.time(); out=fn(*args, **kwargs); dt=time.time()-t0
+    return out, dt
+
 
 def _one(port: int, path: str="/") -> float:
     t0=time.time()
@@ -10,6 +33,7 @@ def _one(port: int, path: str="/") -> float:
     conn.request("GET", path)
     r = conn.getresponse(); r.read()
     return (time.time()-t0)*1000.0
+
 
 def load_test(port: int, paths: List[str], concurrency: int = 8, total_requests: int = 40) -> Dict[str,Any]:
     lat: List[float] = []
