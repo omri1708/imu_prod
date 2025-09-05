@@ -1,4 +1,4 @@
-// imu_repo/ui/web/client_widget.js  (מורחב)
+// imu_repo/ui/web/client_widget.js
 (function(){
   function distinctSources(evList){ const s=new Set(); (evList||[]).forEach(ev=>{const src=ev.source||ev.url||ev.sha256||ev.kind; if(src) s.add(String(src));}); return s.size; }
   function verifyGrounded(bundle, minSources=1, minTrust=1.0){
@@ -9,13 +9,11 @@
       if(!c || typeof c!=="object" || !c.type || !c.text) throw new Error(`claim[${i}] bad`);
       const ev=c.evidence||[]; if(!Array.isArray(ev)||ev.length===0) throw new Error(`claim[${i}] no evidence`);
       const ds=distinctSources(ev); if(ds<minSources) throw new Error(`claim[${i}] insufficient sources`);
-      let score=ds; ev.forEach(e=>{ if(e.sha256) score+=0.5; if((e.url||"").startsWith("https://")) score+=0.25; });
-      trust+=score;
+      let score=ds; ev.forEach(e=>{ if(e.sha256) score+=0.5; if((e.url||"").startsWith("https://")) score+=0.25; }); trust+=score;
     });
     if(trust<minTrust) throw new Error("low total trust");
     return {trust};
   }
-
   class TableWidget {
     constructor(rootId, keyField){ this.root=document.getElementById(rootId); this.keyField=keyField; this.rows=new Map(); this.sortCol=null; this.sortRev=false; this.filters=new Map();}
     apply(payload){
@@ -109,4 +107,67 @@
   }
 
   window.IMUClient = { TableWidget, ChartWidget, MetricWidget, LogWidget, connectWS };
+
+  class HeatmapWidget {
+    constructor(rootId, rows, cols){ this.root=document.getElementById(rootId); this.rows=rows; this.cols=cols; this.mat=[]; for(let r=0;r<rows;r++){ this.mat[r]=Array(cols).fill(0); } }
+    apply(payload){
+      (payload.set||[]).forEach(([r,c,v])=>{ if(r>=0&&r<this.rows&&c>=0&&c<this.cols) this.mat[r][c]=Number(v); });
+      (payload.inc||[]).forEach(([r,c,d])=>{ if(r>=0&&r<this.rows&&c>=0&&c<this.cols) this.mat[r][c]+=Number(d); });
+      this.render();
+    }
+    render(){
+      if(!this.root) return;
+      if(!this.canvas){ this.canvas=document.createElement("canvas"); this.canvas.width=this.root.clientWidth||400; this.canvas.height=200; this.root.appendChild(this.canvas); }
+      const ctx=this.canvas.getContext("2d"); const W=this.canvas.width, H=this.canvas.height;
+      const cw=W/this.cols, ch=H/this.rows; ctx.clearRect(0,0,W,H);
+      let mx=0; for(let r=0;r<this.rows;r++) for(let c=0;c<this.cols;c++) mx=Math.max(mx,this.mat[r][c]);
+      for(let r=0;r<this.rows;r++){
+        for(let c=0;c<this.cols;c++){
+          const v=this.mat[r][c]/(mx||1); const g=Math.floor(255*v);
+          ctx.fillStyle=`rgb(${g},${Math.floor(180*v)},255)`; ctx.fillRect(c*cw, r*ch, cw-1, ch-1);
+        }
+      }
+    }
+  }
+
+  class BarChartWidget {
+    constructor(rootId){ this.root=document.getElementById(rootId); this.bars={}; }
+    apply(payload){
+      (payload.set||[]).forEach(([k,v])=>{ this.bars[String(k)]=Number(v); });
+      (payload.inc||[]).forEach(([k,d])=>{ const kk=String(k); this.bars[kk]=(this.bars[kk]||0)+Number(d); });
+      this.render();
+    }
+    render(){
+      if(!this.root) return;
+      const entries=Object.entries(this.bars); if(!this.canvas){ this.canvas=document.createElement("canvas"); this.canvas.width=this.root.clientWidth||400; this.canvas.height=160; this.root.appendChild(this.canvas); }
+      const ctx=this.canvas.getContext("2d"); const W=this.canvas.width, H=this.canvas.height;
+      ctx.clearRect(0,0,W,H);
+      if(entries.length===0) return;
+      const max=Math.max(...entries.map(([_,v])=>v));
+      const bw=W/entries.length;
+      entries.forEach(([k,v],i)=>{
+        const h=(max? (v/max)*H : 0);
+        ctx.fillRect(i*bw+2, H-h, bw-4, h);
+      });
+    }
+  }
+
+  function connectWS(url, {onMsg, topics=[], minSources=1, minTrust=1.0}){
+    const ws = new WebSocket(url);
+    ws.onopen = ()=>{
+      ws.send(JSON.stringify({op:"ui/subscribe", bundle:{topics}}));
+    };
+    ws.onmessage = (ev)=>{
+      try{
+        const doc=JSON.parse(ev.data);
+        if(/^control\//.test(doc.op)) return;
+        verifyGrounded(doc.bundle, minSources, minTrust);
+        onMsg(doc);
+      }catch(e){ console.warn("drop", e); }
+    };
+    return ws;
+  }
+
+  // חשיפת ה-API
+  window.IMUClient = { TableWidget, ChartWidget, MetricWidget, LogWidget, HeatmapWidget, BarChartWidget, connectWS };
 })();

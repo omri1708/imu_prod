@@ -1,7 +1,6 @@
-# imu_repo/ui/dsl_runtime_rt.py  (הרחבה על גבי הגרסה הקודמת)
+# imu_repo/ui/dsl_runtime_rt.py  (מעדכן: תוספת Heatmap/BarChart)
 from __future__ import annotations
 from typing import Any, Dict, List, Callable, Optional
-import json
 
 class GroundingViolation(Exception): ...
 def _distinct_sources(evidence: List[Dict[str, Any]]) -> int:
@@ -34,7 +33,7 @@ def _verify_grounded_bundle(bundle: Dict[str, Any], *, min_sources: int = 1, min
     if trust < min_trust: raise GroundingViolation("low_total_trust")
     return {"trust": trust, "claims": claims}
 
-class Widget:
+class Widget: 
     def apply(self, payload: Dict[str, Any]) -> None: raise NotImplementedError
 
 class TableWidget(Widget):
@@ -59,8 +58,7 @@ class TableWidget(Widget):
         if rows:
             for r in rows:
                 k = r.get(self.key_field)
-                if k is not None:
-                    self.rows[k] = r
+                if k is not None: self.rows[k] = r
         if ops:
             for op in ops:
                 if op.get("op") == "upsert":
@@ -74,49 +72,59 @@ class TableWidget(Widget):
     def to_list(self) -> List[Dict[str, Any]]: return self._filtered_sorted()
 
 class ChartWidget(Widget):
-    """ time-series / categories: payload={"append":[[ts,val],...]} or {"set":[[ts,val],...]} """
-    def __init__(self, *, max_points: int = 2048):
+    def __init__(self, *, max_points: int = 4096):
         self.points: List[List[float]] = []
         self.max_points = max_points
     def apply(self, payload: Dict[str, Any]) -> None:
-        if "set" in payload:
-            self.points = list(payload["set"])[: self.max_points]
+        if "set" in payload: self.points = list(payload["set"])[: self.max_points]
         if "append" in payload:
             self.points.extend(payload["append"])
-            if len(self.points) > self.max_points:
-                self.points = self.points[-self.max_points:]
+            if len(self.points) > self.max_points: self.points = self.points[-self.max_points:]
 
 class MetricWidget(Widget):
-    """ payload={"value": float/int, "unit":"ms"|"req/s"|...} """
-    def __init__(self):
-        self.value: float | int | None = None
-        self.unit: str | None = None
+    def __init__(self): self.value=None; self.unit=None
     def apply(self, payload: Dict[str, Any]) -> None:
         if "value" in payload: self.value = payload["value"]
         if "unit" in payload: self.unit = payload["unit"]
 
 class LogWidget(Widget):
-    """ payload={"append":[{"lvl":"INFO","msg":"..."}, ...], "truncate": N} """
-    def __init__(self, *, max_lines: int = 5000):
-        self.lines: List[Dict[str, Any]] = []
-        self.max_lines = max_lines
+    def __init__(self, *, max_lines: int = 10000): self.lines=[]; self.max_lines=max_lines
     def apply(self, payload: Dict[str, Any]) -> None:
         if "append" in payload:
             self.lines.extend(payload["append"])
-            if len(self.lines) > self.max_lines:
-                self.lines = self.lines[-self.max_lines:]
+            if len(self.lines) > self.max_lines: self.lines = self.lines[-self.max_lines:]
         if "truncate" in payload:
-            n = int(payload["truncate"])
-            if n < len(self.lines):
-                self.lines = self.lines[-n:]
+            n = int(payload["truncate"]); 
+            if n < len(self.lines): self.lines = self.lines[-n:]
 
 class GridWidget(Widget):
-    def __init__(self):
-        self.areas: List[Dict[str, Any]] = []
-        self.widgets: List[Dict[str, Any]] = []
+    def __init__(self): self.areas=[]; self.widgets=[]
     def apply(self, payload: Dict[str, Any]) -> None:
         if "areas" in payload: self.areas = payload["areas"]
         if "widgets" in payload: self.widgets = payload["widgets"]
+
+class HeatmapWidget(Widget):
+    """ payload={"set":[[row,col,val],...]} או {"inc":[[row,col,delta],...]} """
+    def __init__(self, *, rows: int, cols: int):
+        self.rows = rows; self.cols = cols
+        self.mat = [[0.0 for _ in range(cols)] for __ in range(rows)]
+    def apply(self, payload: Dict[str, Any]) -> None:
+        if "set" in payload:
+            for r,c,v in payload["set"]:
+                if 0<=r<self.rows and 0<=c<self.cols: self.mat[r][c] = float(v)
+        if "inc" in payload:
+            for r,c,d in payload["inc"]:
+                if 0<=r<self.rows and 0<=c<self.cols: self.mat[r][c] += float(d)
+
+class BarChartWidget(Widget):
+    """ payload={"set":[["cat",value],...]} או {"inc":[["cat",delta],...]} """
+    def __init__(self): self.bars: Dict[str,float]={}
+    def apply(self, payload: Dict[str, Any]) -> None:
+        if "set" in payload:
+            self.bars = {str(k): float(v) for (k,v) in payload["set"]}
+        if "inc" in payload:
+            for k,d in payload["inc"]:
+                k = str(k); self.bars[k] = self.bars.get(k,0.0) + float(d)
 
 class UISession:
     def __init__(self, *, min_sources=1, min_trust=1.0):
@@ -127,8 +135,7 @@ class UISession:
     def register(self, name: str, widget: Widget): self._widgets[name] = widget
 
     def handle_stream_message(self, envelope: Dict[str, Any]) -> Dict[str, Any]:
-        op = envelope.get("op")
-        bundle = envelope.get("bundle", {})
+        op = envelope.get("op"); bundle = envelope.get("bundle", {})
         _verify_grounded_bundle(bundle, min_sources=self._min_sources, min_trust=self._min_trust)
         ui = bundle.get("ui", {})
         for target, payload in ui.items():

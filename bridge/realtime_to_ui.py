@@ -28,40 +28,61 @@ def _mk_metrics_event(t: float, val: float) -> Dict[str, Any]:
     }]
     return {"text":"metrics tick", "claims":claims, "ui": ui}
 
+
+def _claims(tag: str) -> list[dict]:
+    return [{
+        "type": "telemetry",
+        "text": f"{tag} stream",
+        "evidence": [{"kind":"internal_stream","source":"local"}]
+    }]
+
+def ev_orders(i: int) -> Dict[str, Any]:
+    row = {"id": i, "sku": f"SKU{i%7:03d}", "qty": random.randint(1,9), "price": round(random.uniform(5,120),2)}
+    return {"text":"orders update", "claims": _claims("orders"),
+            "ui":{"orders_table":{"ops":[{"op":"upsert","row":row}]}}}
+
+def ev_metrics(t: float) -> Dict[str, Any]:
+    return {"text":"metrics tick", "claims": _claims("metrics"),
+            "ui":{"qps_metric":{"value":round(5+random.random()*3,2), "unit":"req/s"},
+                  "latency_chart":{"append":[[t, 100+50*random.random()]]},
+                  "logs_panel":{"append":[{"lvl":"INFO","msg":f"tick {round(t,2)}"}]}}}
+
+def ev_heatbar() -> Dict[str, Any]:
+    # Heatmap אקראי + עדכון ברים
+    updates = [[random.randint(0,7), random.randint(0,7), random.random()]]
+    bars = [["A", random.random()*5], ["B", random.random()*3], ["C", random.random()*7]]
+    return {"text":"viz update","claims":_claims("viz"),
+            "ui":{"heatmap":{"inc":updates},
+                  "barchart":{"set":bars}}}
+
+
 async def handler(op: str, bundle: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    # ניהול subscribe "לוגי": לא צריך state פר־נושא בקוד הדוגמה
     if op == "ui/subscribe":
         return "control/ack", {"ok": True, "topics": bundle.get("topics", [])}
     return "control/ack", {"ok": True}
 
 async def run_push_servers():
-    policy = {"min_distinct_sources": 1, "min_total_trust": 1.0, "perf_sla":{"latency_ms":{"p95_max":200}}}
+    policy = {"min_distinct_sources":1, "min_total_trust":1.0, "perf_sla":{"latency_ms":{"p95_max":200}}}
     sink = StrictSink(policy)
 
-    # TCP (למי שרוצה לקוח TCP)
     tcp = TCPFramedServer("127.0.0.1", 9401, handler, sink)
     await tcp.start()
 
-    # WS Push — נרשום חיבורים ונשדר לכולם
-    ws = WSPushServer("127.0.0.1", 9402, handler, sink)
+    ws = WSPushServer("127.0.0.1", 9402, handler, sink,
+                      queue_max=512, msg_rate=200, byte_rate=2_000_000, burst_msgs=400, burst_bytes=4_000_000)
     await ws.start()
 
     async def publisher():
-        i = 0
+        i=0
         while True:
-            i += 1
-            t = time.time()
-            # אירועי הזמנה
-            await ws.broadcast("ui/update", _mk_order_event(i))
-            # טלמטריה
-            await ws.broadcast("ui/update", _mk_metrics_event(t, val=5+random.random()*3))
-            await asyncio.sleep(0.5)
+            i+=1; t=time.time()
+            await ws.broadcast("ui/update", ev_orders(i), topic="orders")
+            await ws.broadcast("ui/update", ev_metrics(t), topic="metrics")
+            await ws.broadcast("ui/update", ev_heatbar(), topic="viz")
+            await asyncio.sleep(0.25)
 
-    async def serve():
-        await ws.run_forever()
-
-    print("Starting realtime bridge: TCP 9401, WS 9402")
-    await asyncio.gather(serve(), publisher())
+    print("Starting realtime bridge: TCP 9401, WS 9402 (topics: orders, metrics, viz)")
+    await asyncio.gather(ws.run_forever(), publisher())
 
 if __name__ == "__main__":
     asyncio.run(run_push_servers())
