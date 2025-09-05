@@ -6,6 +6,7 @@ from engine.consistency import validate_claims_and_consistency, ConsistencyError
 from engine.provenance import enforce_min_provenance, ProvenanceError
 from engine.trust_tiers import enforce_trust_requirements, TrustPolicyError
 from engine.key_delegation import expand_keyring_with_chain, DelegationError, enforce_scope_for_kid
+from engine.evidence_freshness import enforce_claims_freshness, FreshnessError 
 
 class VerificationFailed(Exception): ...
 
@@ -24,17 +25,17 @@ def verify_bundle(bundle: Dict[str,Any], policy: Dict[str,Any], *, keyring: Dict
         for c in claims:
             enforce_trust_requirements(c, policy)
             enforce_min_provenance(c, policy, http_fetcher=http_fetcher)
-    except (TrustPolicyError, ProvenanceError, ConsistencyError) as e:
+        # בדיקת טריות לכל ה-claims (ייתכן SLA פר-סוג/ברירת־מחדל)
+        enforce_claims_freshness(claims, policy)
+    except (TrustPolicyError, ProvenanceError, ConsistencyError, FreshnessError) as e:
         raise VerificationFailed(str(e))
     return {"ok": True, "claims": len(claims)}
-
 
 def verify_bundle_with_chain(bundle: Dict[str,Any], policy: Dict[str,Any], *, root_keyring: Dict[str,Dict[str,str]], trust_chain: List[Dict[str,Any]], http_fetcher=None, expected_scope: str | None=None) -> Dict[str,Any]:
     try:
         kr = expand_keyring_with_chain(root_keyring, trust_chain)
     except DelegationError as e:
         raise VerificationFailed(f"delegation error: {e}")
-    # אם הוגדר scope — ודא שהמפתח החותם מורשה
     if expected_scope:
         sig = bundle.get("signature") or {}
         kid = sig.get("key_id")
