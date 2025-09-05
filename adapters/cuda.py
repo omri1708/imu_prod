@@ -10,6 +10,21 @@ from typing import Dict
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
+import shutil, subprocess, os
+from .contracts import AdapterResult, require
+
+
+def run_cuda_job(cuda_src: str, out_bin: str) -> AdapterResult:
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        return require("CUDA Toolkit (nvcc)", "Install NVIDIA CUDA toolkit matching your driver",
+                       ["# visit: https://developer.nvidia.com/cuda-downloads",
+                        "# then ensure nvcc on PATH"])
+    try:
+        subprocess.run([nvcc, cuda_src, "-o", out_bin], check=True)
+        return AdapterResult(status="ok", message="CUDA compile ok", outputs={"bin": out_bin})
+    except subprocess.CalledProcessError as e:
+        return AdapterResult(status="error", message=f"nvcc failed: {e}", outputs={})
 
 class CUDAAdapter(BuildAdapter):
     KIND = "cuda"

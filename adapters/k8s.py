@@ -5,6 +5,28 @@ from engine.adapter_types import AdapterResult
 from common.exc import ResourceRequired
 from storage import cas
 from storage.provenance import record_provenance
+import shutil, subprocess, json, tempfile, os
+from .contracts import AdapterResult, require
+
+
+def deploy_k8s_manifest(manifest_yaml: str, namespace: str="default") -> AdapterResult:
+    kubectl = shutil.which("kubectl")
+    if not kubectl:
+        return require("kubectl", "Install kubectl and configure kubeconfig",
+                       ["curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl",
+                        "chmod +x kubectl && sudo mv kubectl /usr/local/bin/"])
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+        f.write(manifest_yaml)
+        path = f.name
+    try:
+        subprocess.run([kubectl, "apply", "-n", namespace, "-f", path], check=True)
+        out = subprocess.check_output([kubectl, "get", "all", "-n", namespace, "-o", "json"])
+        return AdapterResult(status="ok", message="K8s applied", outputs={"state": json.loads(out.decode())})
+    except subprocess.CalledProcessError as e:
+        return AdapterResult(status="error", message=f"kubectl failed: {e}", outputs={})
+    finally:
+        try: os.remove(path)
+        except Exception: pass
 
 class K8sAdapter:
     """בניית מניפסט K8s ו-rollout מדורג."""

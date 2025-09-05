@@ -10,6 +10,23 @@ from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
 
+
+import shutil, subprocess
+from .contracts import AdapterResult, require
+
+
+def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> AdapterResult:
+    if not shutil.which("xcodebuild"):
+        return require("Xcode", "Xcode Command Line Tools / Xcode.app required",
+                       ["xcode-select --install"])
+    try:
+        subprocess.run(["xcodebuild", "-scheme", scheme, "-sdk", sdk, "build"],
+                       cwd=project_dir, check=True)
+        return AdapterResult(status="ok", message="iOS build complete", outputs={"xcbuild": "ok"})
+    except subprocess.CalledProcessError as e:
+        return AdapterResult(status="error", message=f"xcodebuild failed: {e}", outputs={})
+    
+
 class IOSAdapter(BuildAdapter):
     KIND = "ios"
 

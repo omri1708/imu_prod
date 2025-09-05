@@ -10,6 +10,24 @@ from typing import Dict
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
+import shutil, subprocess, os, sys
+from .contracts import AdapterResult, require
+
+
+def run_unity_cli(project_dir: str, target: str="StandaloneLinux64") -> AdapterResult:
+    unity = shutil.which("unity-editor") or shutil.which("Unity") or shutil.which("Unity.exe")
+    if not unity:
+        return require("Unity CLI", "Unity Hub/Editor CLI required",
+                       ["# install Unity Editor CLI for your OS; accept EULA via hub"])
+    args = [unity, "-batchmode", "-quit",
+            "-projectPath", project_dir,
+            "-buildTarget", target,
+            "-logFile", os.path.join(project_dir, "Editor.log")]
+    try:
+        subprocess.run(args, check=True)
+        return AdapterResult(status="ok", message="Unity build complete", outputs={"target": target})
+    except subprocess.CalledProcessError as e:
+        return AdapterResult(status="error", message=f"Unity build failed: {e}", outputs={})
 
 class UnityAdapter(BuildAdapter):
     KIND = "unity"

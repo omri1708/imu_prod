@@ -17,7 +17,14 @@ from stream.broker import Broker
 from engine.enforcer import enforce_claims, GroundingError
 from adapters.unity_cli import run_unity_build, ActionRequired as UnityReq
 from adapters.k8s_uploader import upload_dir_with_tar, deploy_k8s_job, ActionRequired as K8sReq
-
+from __future__ import annotations
+from typing import Dict, Any
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+from broker.stream_bus import bus
+from engine.adapter_runner import enforce_policy, ResourceRequired
+from adapters import android, ios, unity, cuda, k8s
+from adapters.contracts import AdapterResult
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
@@ -25,6 +32,54 @@ _JOBS_LOCK = threading.RLock()
 
 app = FastAPI()
 BROKERS: Dict[str, Broker] = {}
+
+
+ADAPTERS = {
+    "android": lambda p: android.run_android_build(**p),
+    "ios":     lambda p: ios.run_ios_build(**p),
+    "unity":   lambda p: unity.run_unity_cli(**p),
+    "cuda":    lambda p: cuda.run_cuda_job(**p),
+    "k8s":     lambda p: k8s.deploy_k8s_manifest(**p),
+}
+
+class Handler(BaseHTTPRequestHandler):
+    def _json(self, code: int, payload: Dict[str,Any]):
+        self.send_response(code); self.send_header("Content-Type","application/json"); self.end_headers()
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    def do_POST(self):
+        if self.path != "/run_adapter":
+            return self._json(404, {"error":"not found"})
+        ln = int(self.headers.get("Content-Length","0"))
+        body = json.loads(self.rfile.read(ln) or b"{}")
+        user = body.get("user_id","anon")
+        adapter = body.get("adapter")
+        params = body.get("params",{})
+        topic = f"adapter.{adapter}.run"
+        try:
+            enforce_policy(user_id=user, topic=topic, trust=body.get("trust","unknown"))
+        except ResourceRequired as rr:
+            bus.publish("timeline", {"type":"policy","user":user,"topic":topic,"required":rr.required, "priority":"high"})
+            return self._json(200, {"status":"awaiting_consent","required": rr.required})
+
+        if adapter not in ADAPTERS:
+            return self._json(400, {"status":"error","message":"unknown adapter"})
+        bus.publish("progress", {"phase":"start","adapter":adapter,"percent":0,"priority":"high"})
+        res: AdapterResult = ADAPTERS[adapter](params)
+        if res.status == "awaiting_consent":
+            bus.publish("timeline", {"type":"resource","adapter":adapter,"required":res.required,"priority":"high"})
+            return self._json(200, {"status":"awaiting_consent","required":res.required})
+        if res.status == "ok":
+            bus.publish("progress", {"phase":"done","adapter":adapter,"percent":100,"priority":"high"})
+            bus.publish("timeline", {"type":"adapter_ok","adapter":adapter,"outputs":res.outputs})
+        else:
+            bus.publish("timeline", {"type":"adapter_error","adapter":adapter,"message":res.message})
+        return self._json(200, {"status":res.status,"message":res.message,"outputs":res.outputs})
+
+def serve(addr="127.0.0.1", port=8089):
+    httpd = HTTPServer((addr,port), Handler)
+    httpd.serve_forever()
+
 
 def broker_for(uid: str) -> Broker:
     b = BROKERS.get(uid)
@@ -217,10 +272,6 @@ class Handler(BaseHTTPRequestHandler):
 
         _bad(self, "not_found", 404)
 
-def serve(addr: str = "127.0.0.1", port: int = 8088):
-    httpd = HTTPServer((addr, port), Handler)
-    print(f"[IMU-HTTP] serving on http://{addr}:{port}")
-    httpd.serve_forever()
 
 if __name__ == "__main__":
     serve()

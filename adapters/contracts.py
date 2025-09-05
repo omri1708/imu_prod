@@ -1,5 +1,8 @@
 # adapters/contracts.py
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, Literal
 import shutil, os, hashlib, json, time, subprocess
 from dataclasses import dataclass
 
@@ -8,6 +11,24 @@ class ResourceRequired(Exception):
         super().__init__(f"{what} required")
         self.what = what
         self.how_to_install = how_to_install
+
+
+Status = Literal["ok","awaiting_consent","blocked","error"]
+
+@dataclass
+class AdapterResult:
+    status: Status
+    message: str
+    outputs: Dict[str,Any]
+    required: Optional[Dict[str,Any]] = None  # when awaiting_consent
+
+def require(resource: str, hint: str, commands: list[str]) -> AdapterResult:
+    return AdapterResult(
+        status="awaiting_consent",
+        message=f"Resource required: {resource}",
+        outputs={},
+        required={"resource": resource, "hint": hint, "commands": commands},
+    )
 
 @dataclass
 class Provenance:
