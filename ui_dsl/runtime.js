@@ -285,3 +285,36 @@ export class UIDSLRuntime {
     }
   }
 }
+
+/* eslint-disable */
+export function attachLiveTimeline(endpoint, onEvent) {
+  const es = new EventSource(endpoint);
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (onEvent) onEvent(data);
+    } catch (e) {}
+  };
+  es.onerror = () => {};
+  return es;
+}
+
+export function renderProgressBar(el, id) {
+  el.innerHTML = `<div data-id="${id}" style="width:100%;background:#eee">
+    <div class="bar" style="width:0;height:8px;background:#4a90e2"></div>
+  </div>`;
+  return {
+    set(pct){ el.querySelector(".bar").style.width = Math.max(0,Math.min(100,pct))+"%"; }
+  };
+}
+
+export function renderTimeline(el) {
+  el.innerHTML = `<ul class="timeline" style="list-style:none;padding:0;margin:0;"></ul>`;
+  return {
+    push(ev) {
+      const li=document.createElement("li");
+      li.textContent = `[${new Date(ev.ts).toISOString()}] ${ev.topic}: `+JSON.stringify(ev.payload);
+      el.querySelector(".timeline").prepend(li);
+    }
+  };
+}

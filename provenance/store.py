@@ -8,55 +8,76 @@ import hashlib, json, os, shutil, time
 from pathlib import Path
 from typing import Optional, Dict
 from contracts.base import Artifact
+from typing import Dict, Any, Optional, Tuple
+import hashlib, json, os, time, threading
+class ResourceRequired(RuntimeError):
+    def __init__(self, what:str, how:str):
+        super().__init__(f"resource_required: {what}\nhow_to_provide: {how}")
+        self.what=what; self.how=how
+
 
 class ProvenanceStore:
     """
-    Content-addressable store:
-      - כל artifact מקבל sha256 לפי תוכנו.
-      - נשמר metadata.json עם רמות אמון/תיעוד מקור, חותמות זמן, וחוזים רלוונטיים.
+    Content-Addressable Store (CAS) + רמות אמון + TTL.
+    כל פריט נשמר לפי sha256(content), עם מטא: source, trust, ttl, created_at, signatures.
     """
-    def __init__(self, root: str = ".imu_provenance"):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root=".imu_data/prov", default_ttl_s=30*24*3600):
+        self.root=root; os.makedirs(self.root, exist_ok=True)
+        self.default_ttl_s=default_ttl_s
+        self._lock=threading.RLock()
 
-    def _sha256_file(self, p: Path) -> str:
-        h = hashlib.sha256()
-        with p.open('rb') as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b''):
-                h.update(chunk)
-        return h.hexdigest()
+    def _path(self, digest:str)->str:
+        return os.path.join(self.root, digest[:2], digest[2:])
+    def _meta_path(self, digest:str)->str:
+        return self._path(digest)+".meta.json"
 
-    def add(self, art: Artifact, trust_level: str = "unverified", evidence: Optional[Dict]=None) -> Artifact:
-        p = Path(art.path)
-        if not p.exists():
-            raise FileNotFoundError(f"artifact_not_found: {p}")
-        digest = self._sha256_file(p)
-        dst_dir = self.root / digest
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        dst_path = dst_dir / p.name
-        shutil.copy2(p, dst_path)
-        meta = {
-            "kind": art.kind,
-            "filename": p.name,
-            "sha256": digest,
-            "time": time.time(),
-            "trust_level": trust_level,
-            "evidence": evidence or {},
-            "metadata": art.metadata or {},
-        }
-        (dst_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-        art.provenance_sha256 = digest
-        return art
+    def put(self, content:bytes, source:str, trust:int, ttl_s:Optional[int]=None,
+            evidence:Optional[Dict[str,Any]]=None, signatures:Optional[Dict[str,str]]=None) -> str:
+        """
+        trust ∈ {0..100}; TTL קשיח; evidence: מילון ראיות (כגון URL/sha/headers); signatures: חתימות מקור (אם קיימות).
+        """
+        digest=hashlib.sha256(content).hexdigest()
+        p=self._path(digest); mp=self._meta_path(digest)
+        with self._lock:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            if not os.path.exists(p):
+                with open(p,"wb") as f: f.write(content)
+            meta={
+              "digest":digest,
+              "source":source,
+              "trust":int(trust),
+              "ttl_s": int(self.default_ttl_s if ttl_s is None else ttl_s),
+              "created_at": int(time.time()),
+              "evidence": evidence or {},
+              "signatures": signatures or {}
+            }
+            with open(mp,"w",encoding="utf-8") as f: json.dump(meta,f,ensure_ascii=False,indent=2)
+        return digest
 
-    def get(self, sha256: str) -> Path:
-        d = self.root / sha256
-        if not d.exists():
-            raise FileNotFoundError(f"missing_digest: {sha256}")
-        # Return path to the stored payload (first non-metadata file)
-        for child in d.iterdir():
-            if child.name != "metadata.json":
-                return child
-        raise FileNotFoundError(f"no_payload_for_digest: {sha256}")
+    def get(self, digest:str, min_trust:int=0) -> Tuple[bytes, Dict[str,Any]]:
+        p=self._path(digest); mp=self._meta_path(digest)
+        if not (os.path.exists(p) and os.path.exists(mp)):
+            raise FileNotFoundError(digest)
+        with self._lock:
+            with open(mp,"r",encoding="utf-8") as f: meta=json.load(f)
+            now=int(time.time())
+            if now - int(meta["created_at"]) > int(meta["ttl_s"]):
+                # פג־תוקף – מוחקים קשיח
+                try: os.remove(p)
+                except: pass
+                try: os.remove(mp)
+                except: pass
+                raise RuntimeError(f"expired:{digest}")
+            if meta["trust"] < min_trust:
+                raise RuntimeError(f"insufficient_trust:{meta['trust']}< {min_trust}")
+            with open(p,"rb") as f: content=f.read()
+        return content, meta
+
+    def verify_chain(self, digest:str, min_trust:int=50, require_signature:bool=False)->bool:
+        _, meta=self.get(digest, min_trust=min_trust)
+        if require_signature and not meta.get("signatures"):
+            return False
+        return True
 
 def _ensure_keys(key_dir: str):
     try:
