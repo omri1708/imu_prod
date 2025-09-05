@@ -1,11 +1,9 @@
-# imu_repo/ui/dsl_runtime_rt.py
+# imu_repo/ui/dsl_runtime_rt.py  (הרחבה על גבי הגרסה הקודמת)
 from __future__ import annotations
 from typing import Any, Dict, List, Callable, Optional
-import json, hashlib
+import json
 
-class GroundingViolation(Exception):
-    pass
-
+class GroundingViolation(Exception): ...
 def _distinct_sources(evidence: List[Dict[str, Any]]) -> int:
     seen = set()
     for ev in evidence:
@@ -27,7 +25,6 @@ def _verify_grounded_bundle(bundle: Dict[str, Any], *, min_sources: int = 1, min
         if not isinstance(ev, list) or not ev: raise GroundingViolation(f"claim_{i}_no_evidence")
         ds = _distinct_sources(ev)
         if ds < min_sources: raise GroundingViolation(f"claim_{i}_insufficient_sources")
-        # ניקוד פשוט: מקור ייחודי=1, sha256=+0.5, https=+0.25
         score = ds
         for e in ev:
             if "sha256" in e: score += 0.5
@@ -37,16 +34,10 @@ def _verify_grounded_bundle(bundle: Dict[str, Any], *, min_sources: int = 1, min
     if trust < min_trust: raise GroundingViolation("low_total_trust")
     return {"trust": trust, "claims": claims}
 
-# רישום ווידג’טים וצנרת עדכונים
 class Widget:
-    def apply(self, payload: Dict[str, Any]) -> None:
-        raise NotImplementedError
+    def apply(self, payload: Dict[str, Any]) -> None: raise NotImplementedError
 
 class TableWidget(Widget):
-    """
-    טבלה עם סינון/מיון בצד הלקוח (מושתת על שלב 94–95). כאן נוסיף update() מסטרים.
-    payload צפוי: {"rows":[{...}], "schema":{"columns":[...]}, "ops": [{"op":"upsert","key":...,"row":{...}}, ...]}
-    """
     def __init__(self, *, key_field: str):
         self.key_field = key_field
         self.rows: Dict[Any, Dict[str, Any]] = {}
@@ -54,53 +45,75 @@ class TableWidget(Widget):
         self.sort_reverse: bool = False
         self.filters: Dict[str, Callable[[Any], bool]] = {}
 
-    def set_sort(self, col: str, reverse: bool = False):
-        self.sort_key, self.sort_reverse = col, reverse
-
-    def set_filter(self, col: str, fn: Callable[[Any], bool]):
-        self.filters[col] = fn
+    def set_sort(self, col: str, reverse: bool = False): self.sort_key, self.sort_reverse = col, reverse
+    def set_filter(self, col: str, fn: Callable[[Any], bool]): self.filters[col] = fn
 
     def _filtered_sorted(self) -> List[Dict[str, Any]]:
         vals = list(self.rows.values())
-        for col, fn in self.filters.items():
-            vals = [r for r in vals if fn(r.get(col))]
-        if self.sort_key:
-            vals.sort(key=lambda r: r.get(self.sort_key), reverse=self.sort_reverse)
+        for col, fn in self.filters.items(): vals = [r for r in vals if fn(r.get(col))]
+        if self.sort_key: vals.sort(key=lambda r: r.get(self.sort_key), reverse=self.sort_reverse)
         return vals
 
     def apply(self, payload: Dict[str, Any]) -> None:
-        # תמיכה ב-upsert/batch
-        ops = payload.get("ops")
-        rows = payload.get("rows")
+        ops = payload.get("ops"); rows = payload.get("rows")
         if rows:
             for r in rows:
                 k = r.get(self.key_field)
-                if k is None: continue
-                self.rows[k] = r
+                if k is not None:
+                    self.rows[k] = r
         if ops:
             for op in ops:
                 if op.get("op") == "upsert":
-                    r = op.get("row", {})
-                    k = r.get(self.key_field)
-                    if k is None: continue
-                    self.rows[k] = {**self.rows.get(k, {}), **r}
+                    r = op.get("row", {}); k = r.get(self.key_field)
+                    if k is not None:
+                        self.rows[k] = {**self.rows.get(k, {}), **r}
                 elif op.get("op") == "delete":
-                    k = op.get("key")
+                    k = op.get("key"); 
                     if k in self.rows: del self.rows[k]
 
-    def to_list(self) -> List[Dict[str, Any]]:
-        return self._filtered_sorted()
+    def to_list(self) -> List[Dict[str, Any]]: return self._filtered_sorted()
+
+class ChartWidget(Widget):
+    """ time-series / categories: payload={"append":[[ts,val],...]} or {"set":[[ts,val],...]} """
+    def __init__(self, *, max_points: int = 2048):
+        self.points: List[List[float]] = []
+        self.max_points = max_points
+    def apply(self, payload: Dict[str, Any]) -> None:
+        if "set" in payload:
+            self.points = list(payload["set"])[: self.max_points]
+        if "append" in payload:
+            self.points.extend(payload["append"])
+            if len(self.points) > self.max_points:
+                self.points = self.points[-self.max_points:]
+
+class MetricWidget(Widget):
+    """ payload={"value": float/int, "unit":"ms"|"req/s"|...} """
+    def __init__(self):
+        self.value: float | int | None = None
+        self.unit: str | None = None
+    def apply(self, payload: Dict[str, Any]) -> None:
+        if "value" in payload: self.value = payload["value"]
+        if "unit" in payload: self.unit = payload["unit"]
+
+class LogWidget(Widget):
+    """ payload={"append":[{"lvl":"INFO","msg":"..."}, ...], "truncate": N} """
+    def __init__(self, *, max_lines: int = 5000):
+        self.lines: List[Dict[str, Any]] = []
+        self.max_lines = max_lines
+    def apply(self, payload: Dict[str, Any]) -> None:
+        if "append" in payload:
+            self.lines.extend(payload["append"])
+            if len(self.lines) > self.max_lines:
+                self.lines = self.lines[-self.max_lines:]
+        if "truncate" in payload:
+            n = int(payload["truncate"])
+            if n < len(self.lines):
+                self.lines = self.lines[-n:]
 
 class GridWidget(Widget):
-    """
-    Grid מתקדם (areas/nested) – כאן מנהל רק מודל מצב (לא CSS בפועל),
-    ומתממשק למנוע הרנדרינג של שלב 95+ (קיים בצד הדפדפן).
-    payload: {"areas":[{"name":"header","x":0,"y":0,"w":12,"h":1},...], "widgets":[...]}
-    """
     def __init__(self):
         self.areas: List[Dict[str, Any]] = []
         self.widgets: List[Dict[str, Any]] = []
-
     def apply(self, payload: Dict[str, Any]) -> None:
         if "areas" in payload: self.areas = payload["areas"]
         if "widgets" in payload: self.widgets = payload["widgets"]
@@ -111,16 +124,11 @@ class UISession:
         self._min_sources = min_sources
         self._min_trust = min_trust
 
-    def register(self, name: str, widget: Widget):
-        self._widgets[name] = widget
+    def register(self, name: str, widget: Widget): self._widgets[name] = widget
 
     def handle_stream_message(self, envelope: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        envelope = {"op": "...", "bundle": {"text": "...", "claims":[...], "meta": {...}, "ui": {...}}}
-        """
         op = envelope.get("op")
         bundle = envelope.get("bundle", {})
-        # אכיפת Grounded-Strict בצד קליינט
         _verify_grounded_bundle(bundle, min_sources=self._min_sources, min_trust=self._min_trust)
         ui = bundle.get("ui", {})
         for target, payload in ui.items():
