@@ -1,6 +1,13 @@
 # imu_repo/engine/errors.py
 from __future__ import annotations
 
+
+class ResourceRequired(RuntimeError):
+    def __init__(self, what: str, how_to_get: str):
+        super().__init__(f"resource_required: {what} — {how_to_get}")
+        self.what = what
+        self.how_to_get = how_to_get
+        
 class GuardRejection(Exception):
     def __init__(self, reason: str, details: dict | None = None):
         super().__init__(reason)

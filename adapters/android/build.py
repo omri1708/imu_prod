@@ -3,6 +3,27 @@
 import os, shutil, tempfile
 from ..contracts import ensure_tool, run, record_provenance
 
+import os, subprocess, shlex
+from contracts.adapters import android_env
+from engine.errors import ResourceRequired
+
+
+def build_apk(project_dir: str, variant: str = "Release") -> str:
+    android_env()
+    gradlew = os.path.join(project_dir, "gradlew")
+    if os.path.isfile(gradlew):
+        cmd = f"{shlex.quote(gradlew)} assemble{variant}"
+    else:
+        cmd = f"gradle assemble{variant}"
+    subprocess.check_call(cmd, cwd=project_dir, shell=True)
+    # מצא APK
+    out = os.path.join(project_dir, "app","build","outputs","apk", variant.lower())
+    for root,_,files in os.walk(out):
+        for f in files:
+            if f.endswith(".apk"): return os.path.join(root,f)
+    raise FileNotFoundError("APK not found after build")
+
+
 def build_android(project_dir: str, variant: str = "Debug") -> dict:
     """
     בונה APK ע"י gradle wrapper אם קיים, אחרת gradle.

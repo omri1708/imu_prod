@@ -1,94 +1,83 @@
-import json, threading, time, os
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any
-from broker.stream import broker
-from governance.user_policy import get_user_policy
-from engine.pipeline_events import run_pipeline_spec
-from audit.log import AppendOnlyAudit
+from wsgiref.simple_server import make_server
+from urllib.parse import parse_qs
+import json, os, mimetypes
+from broker.stream import broker, _Sub
+from broker.policy import DropPolicy
 
-AUDIT = AppendOnlyAudit("var/audit/http.jsonl")
+STATIC_DIR = os.environ.get("IMU_STATIC_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_dsl")))
 
-STATIC_ROOT = os.path.abspath("ui_dsl")
+def _json(start, code, body):
+    start(f"{code} OK", [('Content-Type','application/json; charset=utf-8'),
+                         ('Cache-Control','no-store')])
+    return [json.dumps(body, ensure_ascii=False).encode('utf-8')]
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "IMU/1.0"
+def app(env, start):
+    path = env.get('PATH_INFO','/')
+    method = env.get('REQUEST_METHOD','GET')
 
-    def _json(self, code: int, obj: Dict[str, Any]):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    # SSE
+    if path == "/events":
+        qs = parse_qs(env.get('QUERY_STRING',''))
+        topic = qs.get('topic', ['timeline'])[0]
+        # כל מנוי מקבל תור עם drop-policy בטוח (החלפת נמוכים)
+        sub: _Sub = broker.subscribe(topic, drop_policy=DropPolicy.LOWEST_PRIORITY_REPLACE)
+        start("200 OK", [('Content-Type','text/event-stream'),
+                         ('Cache-Control','no-cache'),
+                         ('Connection','keep-alive')])
+        return broker.sse_iter(sub)
 
-    def _static(self, rel: str):
-        p = os.path.abspath(os.path.join(STATIC_ROOT, rel))
-        if not p.startswith(STATIC_ROOT) or not os.path.exists(p):
-            self.send_error(404); return
-        ct = "text/plain"
-        if p.endswith(".js"): ct = "application/javascript; charset=utf-8"
-        if p.endswith(".html"): ct = "text/html; charset=utf-8"
-        with open(p, "rb") as f:
-            data = f.read()
-        self.send_response(200)
-        self.send_header("Content-Type", ct)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_GET(self):
-        u = urlparse(self.path)
-        if u.path == "/events":
-            qs = parse_qs(u.query)
-            topic = qs.get("topic", ["events"])[0]
-            sub = broker.subscribe(topic, max_queue=2000)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-            for chunk in broker.sse_iter(sub):
-                try:
-                    self.wfile.write(chunk); self.wfile.flush()
-                except Exception:
-                    break
-            return
-        if u.path.startswith("/static/"):
-            rel = u.path[len("/static/"):]
-            return self._static(rel)
-        if u.path == "/healthz":
-            return self._json(200, {"ok": True})
-        return self._json(404, {"error": "not_found"})
-
-    def do_POST(self):
-        u = urlparse(self.path)
-        cl = int(self.headers.get("Content-Length", "0") or "0")
-        raw = self.rfile.read(cl) if cl > 0 else b"{}"
+    # פרסום אירוע
+    if path == "/publish" and method == "POST":
+        size = int(env.get('CONTENT_LENGTH','0') or 0)
+        raw = env['wsgi.input'].read(size) if size>0 else b"{}"
         try:
-            req = json.loads(raw.decode("utf-8"))
-        except Exception:
-            return self._json(400, {"error": "bad_json"})
-        if u.path == "/v1/pipeline/run":
-            user = req.get("user") or "anon"
-            spec_text = req.get("spec") or "{}"
-            policy, ev_index = get_user_policy(user)
-            AUDIT.append({"kind":"pipeline_run_req","user":user})
-            try:
-                run_id = run_pipeline_spec(user=user, spec_text=spec_text, policy=policy, ev_index=ev_index)
-                return self._json(200, {"ok": True, "run_id": run_id})
-            except Exception as e:
-                AUDIT.append({"kind":"pipeline_run_err","user":user,"err":str(e)})
-                return self._json(500, {"ok": False, "error": str(e)})
-        return self._json(404, {"error": "not_found"})
+            data = json.loads(raw.decode('utf-8') or "{}")
+            topic = data.get("topic","timeline")
+            prio = data.get("priority","telemetry")
+            ev = data.get("event",{})
+            ok = broker.publish(topic, ev, priority=prio)
+            return _json(start, 200, {"ok": ok})
+        except Exception as e:
+            return _json(start, 400, {"ok": False, "error": str(e)})
 
-def serve_http(host: str = "127.0.0.1", port: int = 8080):
-    srv = ThreadingHTTPServer((host, port), Handler)
-    t = threading.Thread(target=srv.serve_forever, name="http", daemon=True)
-    t.start()
-    return srv
+    # סטטוס/מדדים
+    if path == "/stats":
+        return _json(start, 200, broker.stats())
+
+    # עדכון קונפיג נושא (rps/burst/max_queue/weight/policy)
+    if path == "/topic/config" and method == "POST":
+        size = int(env.get('CONTENT_LENGTH','0') or 0)
+        raw = env['wsgi.input'].read(size) if size>0 else b"{}"
+        data = json.loads(raw.decode('utf-8') or "{}")
+        topic = data["topic"]
+        cfg = {}
+        for k in ("rps","burst","max_queue","weight"):
+            if k in data: cfg[k] = type(broker._topics[topic]["bucket"].rps if k=="rps" else
+                                        broker._topics[topic]["bucket"].burst if k=="burst" else
+                                        broker._topics[topic]["max_queue"] if k=="max_queue" else
+                                        broker._topics[topic]["weight"])(data[k])
+        policy = data.get("drop_policy")
+        if policy: cfg["drop_policy"] = policy
+        broker.configure_topic(topic, **cfg)
+        return _json(start, 200, {"ok": True, "topic": topic})
+
+    # סטטיק
+    fpath = os.path.normpath(os.path.join(STATIC_DIR, path.lstrip("/")))
+    if path == "/" or not os.path.isfile(fpath):
+        fpath = os.path.join(STATIC_DIR, "index.html")
+    try:
+        ctype, _ = mimetypes.guess_type(fpath); ctype = ctype or "text/plain"
+        with open(fpath,'rb') as fh:
+            buff = fh.read()
+        start("200 OK", [('Content-Type', f"{ctype}; charset=utf-8"),
+                         ('Cache-Control','no-store')])
+        return [buff]
+    except FileNotFoundError:
+        start("404 NOT FOUND", [('Content-Type','text/plain')])
+        return [b'not found']
 
 if __name__ == "__main__":
-    print("IMU HTTP listening on :8080")
-    serve_http("0.0.0.0", 8080)
-    while True: time.sleep(3600)
+    port = int(os.environ.get("IMU_HTTP_PORT","8080"))
+    httpd = make_server("", port, app)
+    print(f"* http://127.0.0.1:{port}  (SSE: /events?topic=progress)")
+    httpd.serve_forever()

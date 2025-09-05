@@ -4,17 +4,16 @@ import time, threading, queue, json
 from dataclasses import dataclass
 from typing import Dict, Optional, Iterator, Tuple, Any, List, Deque
 import collections, os, math
+import time, threading, collections, json, os, math, random
+from typing import Deque, Dict, Any, Optional, Tuple, List
+from .policy import DropPolicy, load_hint, WFQ
 
-
-# עדיפויות: ככל שהמספר גבוה יותר — חשוב יותר
 PRIORITY = {"logic": 3, "telemetry": 2, "logs": 1}
 DEFAULT_PRIORITY = "telemetry"
 
-def _now() -> float:
-    return time.perf_counter()
+def _now() -> float: return time.perf_counter()
 
 class TokenBucket:
-    """דלי אסימונים קלאסי לשסתום זרימה (rps, burst)."""
     def __init__(self, rps: float, burst: int):
         self.rps = float(max(0.0, rps))
         self.burst = int(max(1, burst))
@@ -24,144 +23,140 @@ class TokenBucket:
 
     def allow(self, cost: float = 1.0) -> bool:
         with self._lock:
-            t = _now()
-            dt = max(0.0, t - self.t_last)
-            self.t_last = t
+            t = _now(); dt = max(0.0, t - self.t_last); self.t_last = t
             self.tokens = min(self.burst, self.tokens + dt * self.rps)
             if self.tokens >= cost:
-                self.tokens -= cost
-                return True
+                self.tokens -= cost; return True
             return False
 
 class _Sub:
-    def __init__(self, topic: str, max_queue: int, drop_notify=None):
+    def __init__(self, topic: str, max_queue: int, drop_policy: str, drop_notify=None):
         self.topic = topic
         self.max_queue = max(1, int(max_queue))
-        self.q: Deque[Tuple[int, dict]] = collections.deque()  # (prio, event)
+        self.policy = drop_policy
+        self.q: Deque[Tuple[int, dict]] = collections.deque()
         self.dropped_total = 0
         self._lock = threading.Lock()
         self._pop_cv = threading.Condition(self._lock)
         self._drop_notify = drop_notify
 
-    def push(self, prio: int, ev: dict):
+    def _drop(self, reason: str):
+        self.dropped_total += 1
+        if self._drop_notify:
+            try: self._drop_notify(self.topic, reason)
+            except Exception: pass
+
+    def push(self, prio: int, ev: dict) -> bool:
         with self._lock:
             if len(self.q) < self.max_queue:
-                self.q.append((prio, ev))
-                self._pop_cv.notify_all()
-                return True
-            # תור מלא: אם העדיפות של החדש גבוהה מהנמוכה ביותר — החלף (drop-lowest)
-            lowest_i = None
-            lowest_p = 10**9
-            for i, (p, _) in enumerate(self.q):
-                if p < lowest_p:
-                    lowest_p = p; lowest_i = i
-            if lowest_i is not None and prio > lowest_p:
-                # נשמור סטטיסטיקה על drop
-                self.dropped_total += 1
-                if self._drop_notify:
-                    try: self._drop_notify(self.topic, "queue_full_replace")
-                    except Exception: pass
-                # זרוק את הנמוך
-                self.q.rotate(-lowest_i)
-                self.q.popleft()
-                self.q.rotate(lowest_i)
-                self.q.append((prio, ev))
-                self._pop_cv.notify_all()
-                return True
-            # אחרת—נפיל את החדש
-            self.dropped_total += 1
-            if self._drop_notify:
-                try: self._drop_notify(self.topic, "queue_full_drop_new")
-                except Exception: pass
-            return False
+                self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+
+            pol = self.policy
+            if pol == DropPolicy.TAIL_DROP:
+                self._drop("queue_full_tail_drop"); return False
+            if pol == DropPolicy.HEAD_DROP:
+                if self.q:
+                    self.q.popleft(); self._drop("queue_full_head_drop")
+                    self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+                self._drop("queue_full_head_drop_empty"); return False
+            if pol == DropPolicy.LOWEST_PRIORITY_REPLACE:
+                lowest_i, lowest_p = None, 10**9
+                for i, (p, _) in enumerate(self.q):
+                    if p < lowest_p: lowest_p, lowest_i = p, i
+                if lowest_i is not None and prio > lowest_p:
+                    self._drop("queue_full_replace_lowest")
+                    self.q.rotate(-lowest_i); self.q.popleft(); self.q.rotate(lowest_i)
+                    self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+                self._drop("queue_full_keep"); return False
+            if pol == DropPolicy.RANDOM_EARLY_DROP:
+                # הסתברות לזריקה עולה עם עומס
+                prob = min(0.9, len(self.q)/float(self.max_queue))
+                if random.random() < prob:
+                    self._drop("queue_red_drop"); return False
+                self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+
+            # ברירת מחדל שמרנית
+            self._drop("queue_full_default_drop"); return False
 
     def pop(self, timeout: float = 15.0) -> Optional[dict]:
-        limit = _now() + timeout
+        deadline = _now() + timeout
         with self._lock:
             while not self.q:
-                remaining = limit - _now()
-                if remaining <= 0: return None
-                self._pop_cv.wait(remaining)
-            # קח את הגבוה ביותר
-            best_i = 0; best_p = -1
+                left = deadline - _now()
+                if left <= 0: return None
+                self._pop_cv.wait(left)
+            best_i, best_p = 0, -1
             for i, (p, _) in enumerate(self.q):
-                if p > best_p:
-                    best_p = p; best_i = i
-            self.q.rotate(-best_i)
-            _, ev = self.q.popleft()
-            self.q.rotate(best_i)
+                if p > best_p: best_p, best_i = p, i
+            self.q.rotate(-best_i); _, ev = self.q.popleft(); self.q.rotate(best_i)
             return ev
 
 class Broker:
     """
-    ברוקר רב-נושאי:
-    * Back-pressure גלובלי (טוקן-באקט + N*burst guard).
-    * תורי מנוי בעדיפויות, החלפת נמוכים בגבוהים.
-    * Throttling פר-נושא (rps/burst/max_queue).
+    * Back-pressure גלובלי (דלי אסימונים + שמירת backlog כולל).
+    * Throttling פר-נושא.
+    * WFQ בין נושאים (חלוקה הוגנת לפי משקל, ע"י vtime).
+    * מדיניות זריקה לתורי המנויים.
     """
-
     def __init__(self):
-        # קונפיג ברירת מחדל (ניתן לשינוי בזמן ריצה)
-        self.global_bucket = TokenBucket(
-            rps=float(os.environ.get("IMU_GLOBAL_RPS", "200.0")),
-            burst=int(os.environ.get("IMU_GLOBAL_BURST", "2000"))
-        )
-        self.global_backlog_limit = int(os.environ.get("IMU_GLOBAL_BACKLOG", "50000"))  # N*burst guard
+        self.global_bucket = TokenBucket(float(os.environ.get("IMU_GLOBAL_RPS", "400.0")),
+                                         int(os.environ.get("IMU_GLOBAL_BURST", "4000")))
+        self.global_backlog_soft = int(os.environ.get("IMU_GLOBAL_BACKLOG_SOFT", "50000"))
+        self.global_backlog_hard = int(os.environ.get("IMU_GLOBAL_BACKLOG_HARD", "80000"))
         self._topics: Dict[str, Dict[str, Any]] = {}
         self._subs: Dict[str, List[_Sub]] = {}
         self._lock = threading.RLock()
-        self._metrics = {
-            "published": 0,
-            "rejected_global": 0,
-            "rejected_topic": 0,
-            "dropped_sub": 0,
-            "by_topic": {}  # topic -> dict
-        }
+        self._metrics = {"published":0,"rejected_global":0,"rejected_topic":0,"dropped_sub":0,"by_topic":{}}
+        self._wfq = WFQ()
 
-    def configure_topic(self, topic: str, *, rps: float = 100.0, burst: int = 1000, max_queue: int = 2000):
+    def configure_topic(self, topic: str, *, rps: float = 150.0, burst: int = 1500,
+                        max_queue: int = 3000, drop_policy: str = DropPolicy.LOWEST_PRIORITY_REPLACE, weight: float = 1.0):
         with self._lock:
-            self._topics[topic] = {
-                "bucket": TokenBucket(rps, burst),
-                "max_queue": int(max_queue)
-            }
+            self._topics[topic] = {"bucket": TokenBucket(rps, burst),
+                                   "max_queue": int(max_queue),
+                                   "drop_policy": drop_policy,
+                                   "weight": float(max(0.1, weight)),
+                                   "vstart": 0.0}
             self._metrics["by_topic"].setdefault(topic, {"pub":0,"rej":0,"subscribers":0})
 
-    def subscribe(self, topic: str, *, max_queue: Optional[int] = None) -> _Sub:
+    def subscribe(self, topic: str, *, max_queue: Optional[int] = None, drop_policy: Optional[str]=None) -> _Sub:
         with self._lock:
-            if topic not in self._topics:
-                self.configure_topic(topic)  # ברירת מחדל
+            if topic not in self._topics: self.configure_topic(topic)
             tcfg = self._topics[topic]
             mq = max_queue if max_queue is not None else tcfg["max_queue"]
-            sub = _Sub(topic, mq, drop_notify=self._on_sub_drop)
+            pol = drop_policy if drop_policy is not None else tcfg["drop_policy"]
+            sub = _Sub(topic, mq, pol, drop_notify=self._on_sub_drop)
             self._subs.setdefault(topic, []).append(sub)
             self._metrics["by_topic"][topic]["subscribers"] = len(self._subs[topic])
             return sub
 
     def publish(self, topic: str, event: Dict[str, Any], *, priority: str = DEFAULT_PRIORITY) -> bool:
         prio = PRIORITY.get(priority, PRIORITY[DEFAULT_PRIORITY])
-        # שסתום גלובלי
+
+        # שסתום גלובלי + N*burst guard
         if not self.global_bucket.allow():
-            with self._lock:
-                self._metrics["rejected_global"] += 1
+            with self._lock: self._metrics["rejected_global"] += 1
             return False
-        # N*burst guard ברמת backlog כולל
-        if self._backlog_size() >= self.global_backlog_limit:
-            with self._lock:
-                self._metrics["rejected_global"] += 1
+        backlog = self._backlog_size()
+        hint = load_hint(backlog, self.global_backlog_soft, self.global_backlog_hard)
+        if hint == "critical":
+            with self._lock: self._metrics["rejected_global"] += 1
             return False
-        # נושא
+
         with self._lock:
-            if topic not in self._topics:
-                self.configure_topic(topic)
+            if topic not in self._topics: self.configure_topic(topic)
             tcfg = self._topics[topic]
+            # WFQ vstart (לפי משקל)
+            active_sum = sum(t["weight"] for t in self._topics.values())
+            vtime = self._wfq.tick(active_sum)
+            tcfg["vstart"] = vtime
+
         if not tcfg["bucket"].allow():
             with self._lock:
                 self._metrics["rejected_topic"] += 1
                 self._metrics["by_topic"][topic]["rej"] += 1
             return False
 
-        # הפצה לכל המנויים; אם אין מנויים—לא נצבור “רפאים”
-        pushed_any = False
         with self._lock:
             subs = list(self._subs.get(topic, []))
         if not subs:
@@ -170,10 +165,10 @@ class Broker:
                 self._metrics["by_topic"][topic]["pub"] += 1
             return True
 
-        for sub in subs:
-            ok = sub.push(prio, dict(event))
-            if ok: pushed_any = True
-
+        pushed_any = False
+        for s in subs:
+            ok = s.push(prio, dict(event))
+            pushed_any |= ok
         with self._lock:
             self._metrics["published"] += 1
             self._metrics["by_topic"][topic]["pub"] += 1
@@ -182,9 +177,8 @@ class Broker:
     def _backlog_size(self) -> int:
         total = 0
         with self._lock:
-            for lst in self._subs.values():
-                for s in lst:
-                    total += len(s.q)
+            for subs in self._subs.values():
+                for s in subs: total += len(s.q)
         return total
 
     def _on_sub_drop(self, topic: str, reason: str):
@@ -196,32 +190,14 @@ class Broker:
         with self._lock:
             return json.loads(json.dumps(self._metrics))
 
-    # סטרים ל-SSE (Server-Sent Events) עם heartbeat והשהיה אדיבה
-    def sse_iter(self, sub: _Sub, *, heartbeat_sec: float = 10.0):
-        last_hb = _now()
-        while True:
-            ev = sub.pop(timeout=heartbeat_sec)
-            now = _now()
-            if ev is None:
-                # heartbeat
-                yield f"event: hb\ndata: {{\"ts\": {time.time():.3f}}}\n\n".encode("utf-8")
-                last_hb = now
-                continue
-            data = json.dumps(ev, ensure_ascii=False)
-            yield f"event: msg\ndata: {data}\n\n".encode("utf-8")
-            if now - last_hb > heartbeat_sec:
-                yield f"event: hb\ndata: {{\"ts\": {time.time():.3f}}}\n\n".encode("utf-8")
-                last_hb = now
-
-# סינגלטון
+# סינגלטון וקונפיג בסיסי
 broker = Broker()
-# קונפיג נושאים רלוונטיים כברירת מחדל
 for t, cfg in {
-    "events":      dict(rps=200.0, burst=2000, max_queue=5000),
-    "progress":    dict(rps=300.0, burst=3000, max_queue=8000),
-    "timeline":    dict(rps=100.0, burst=1000, max_queue=4000),
-    "logs":        dict(rps=500.0, burst=5000, max_queue=10000),
-    "telemetry":   dict(rps=800.0, burst=8000, max_queue=12000),
+    "events":    dict(rps=250.0, burst=2500, max_queue=6000, weight=1.0),
+    "progress":  dict(rps=400.0, burst=4000, max_queue=8000, weight=1.5),
+    "timeline":  dict(rps=150.0, burst=1500, max_queue=5000, weight=1.0),
+    "logs":      dict(rps=600.0, burst=6000, max_queue=12000, weight=0.7),
+    "telemetry": dict(rps=900.0, burst=9000, max_queue=14000, weight=1.2),
 }.items():
     broker.configure_topic(t, **cfg)
 

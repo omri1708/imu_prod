@@ -4,6 +4,59 @@ import os, time, json, hashlib, base64
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
 from adapters.contracts import ResourceRequired
+import hashlib, json, os, shutil, time
+from pathlib import Path
+from typing import Optional, Dict
+from contracts.base import Artifact
+
+class ProvenanceStore:
+    """
+    Content-addressable store:
+      - כל artifact מקבל sha256 לפי תוכנו.
+      - נשמר metadata.json עם רמות אמון/תיעוד מקור, חותמות זמן, וחוזים רלוונטיים.
+    """
+    def __init__(self, root: str = ".imu_provenance"):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _sha256_file(self, p: Path) -> str:
+        h = hashlib.sha256()
+        with p.open('rb') as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def add(self, art: Artifact, trust_level: str = "unverified", evidence: Optional[Dict]=None) -> Artifact:
+        p = Path(art.path)
+        if not p.exists():
+            raise FileNotFoundError(f"artifact_not_found: {p}")
+        digest = self._sha256_file(p)
+        dst_dir = self.root / digest
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst_path = dst_dir / p.name
+        shutil.copy2(p, dst_path)
+        meta = {
+            "kind": art.kind,
+            "filename": p.name,
+            "sha256": digest,
+            "time": time.time(),
+            "trust_level": trust_level,
+            "evidence": evidence or {},
+            "metadata": art.metadata or {},
+        }
+        (dst_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        art.provenance_sha256 = digest
+        return art
+
+    def get(self, sha256: str) -> Path:
+        d = self.root / sha256
+        if not d.exists():
+            raise FileNotFoundError(f"missing_digest: {sha256}")
+        # Return path to the stored payload (first non-metadata file)
+        for child in d.iterdir():
+            if child.name != "metadata.json":
+                return child
+        raise FileNotFoundError(f"no_payload_for_digest: {sha256}")
 
 def _ensure_keys(key_dir: str):
     try:

@@ -3,7 +3,29 @@
 import os, shutil, subprocess, tempfile, yaml
 from ..contracts import ensure_tool, run, record_provenance
 from adapters.contracts import ResourceRequired
+import subprocess, shlex, time
+from contracts.adapters import k8s_env
 
+def kubectl(cmd: str):
+    k8s_env()
+    subprocess.check_call(f"kubectl {cmd}", shell=True)
+
+def apply_safe(manifest: str):
+    kubectl(f"apply -f {shlex.quote(manifest)}")
+
+def rollout_status(kind: str, name: str, ns: str = "default", timeout: int = 300):
+    kubectl(f"-n {shlex.quote(ns)} rollout status {kind}/{name} --timeout={timeout}s")
+
+def canary_and_rollout(main_manifest: str, canary_manifest: str, *, kind="deployment", name="app", ns="default"):
+    # שלב 1: Canary
+    apply_safe(canary_manifest)
+    rollout_status(kind, f"{name}-canary", ns)
+    # (כאן רצוי מדדים/בריאות חיצוניים — מחוץ לסקופ הקובץ הזה)
+    time.sleep(2)
+    # שלב 2: Rollout מלא
+    apply_safe(main_manifest)
+    rollout_status(kind, name, ns)
+    
 BASIC_DEPLOY_YAML = """\
 apiVersion: apps/v1
 kind: Deployment

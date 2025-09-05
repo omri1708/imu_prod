@@ -7,3 +7,8 @@
 .imu-timeline__list{ list-style:none; padding:0; margin:0 }
 .imu-timeline__list li{ padding:4px 0; border-bottom:1px solid #eee }
 .imu-grid{ gap:12px }
+.imu-table table{ width:100%; border-collapse:collapse; font: 13px/1.5 system-ui, sans-serif; }
+.imu-table th,.imu-table td{ border-bottom:1px solid #eee; padding:6px 8px; background:#fff }
+.imu-table th{ position:sticky; top:0; background:#f9fafb; z-index:2 }
+.imu-table th.freeze,.imu-table td.freeze{ position:sticky; left:0; background:#f8fafc; z-index:1 }
+.imu-table thead .filters input{ width:100%; box-sizing:border-box; padding:4px 6px; font:inherit }
