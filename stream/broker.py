@@ -1,7 +1,11 @@
 # stream/broker.py
 # -*- coding: utf-8 -*-
 import time, threading, heapq
-from typing import Dict, List, Tuple, Optional, Iterable
+from typing import Dict, List, Tuple, Optional, Iterable, Any
+from policy.user_policy import POLICIES
+import asyncio, time, heapq
+
+
 
 class _Event:
     __slots__ = ("ts","prio","topic","data")
@@ -56,46 +60,69 @@ class Topic:
 
 class Broker:
     """
-    ברוקר אירועים עם:
-      • Back-pressure גלובלי (N*burst) + לכל-נושא
-      • Priority queues (מספר עדיפות גבוה = חשוב)
-      • Throttling per-topic
+    תור עדיפויות פר-משתמש+נושא, עם מגבלות קצבים, תקרת burst גלובלית,
+    ושירות פרסום/מנוי אסינכרוני.
     """
-    def __init__(self, global_capacity: int = 10000):
-        self._topics: Dict[str, Topic] = {}
-        self._lock = threading.RLock()
-        self._global_cap = global_capacity
-        self._global_load = 0
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.pol = POLICIES.get(user_id)
+        self._pq = []  # heap of (priority, ts, seq, topic, payload)
+        self._seq = 0
+        self._subs: Dict[str, asyncio.Queue] = {}
+        self._rate_buckets: Dict[str, Tuple[float, float]] = {}  # topic -> (allowance, last_ts)
+        self._global_window = []
+        self._global_window_sec = 1.0
 
-    def ensure_topic(self, name: str, **cfg) -> Topic:
-        with self._lock:
-            if name not in self._topics:
-                self._topics[name] = Topic(name, **cfg)
-            return self._topics[name]
+    def _priority_of(self, topic: str) -> int:
+        return (self.pol.priority_overrides or {}).get(topic, 5)
 
-    def publish(self, topic: str, data: dict, prio: int = 5) -> bool:
-        with self._lock:
-            if self._global_load >= self._global_cap:
-                # גלובלי: השלך אירוע עדיפות נמוכה קודם
-                # (פשטות: נחסום, אפשר לשפר בהיגיון של ניקוי)
+    def _rate_limit_ok(self, topic: str) -> bool:
+        limit = (self.pol.topic_rate_limits or {}).get(topic)
+        now = time.time()
+        # per-topic token bucket
+        if limit:
+            allowance, last = self._rate_buckets.get(topic, (limit, now))
+            elapsed = max(0.0, now - last)
+            allowance = min(limit, allowance + elapsed * limit)
+            if allowance < 1.0:
+                # נחסום הודעה זו; caller יוכל לנסות שוב
+                self._rate_buckets[topic] = (allowance, now)
                 return False
-            self._global_load += 1
-        try:
-            t = self.ensure_topic(topic)
-            ok = t.put(_Event(topic, data, prio))
-            return ok
-        finally:
-            with self._lock:
-                self._global_load = max(0, self._global_load - 1)
+            allowance -= 1.0
+            self._rate_buckets[topic] = (allowance, now)
+        # global burst guard
+        self._global_window = [t for t in self._global_window if now - t < self._global_window_sec]
+        if len(self._global_window) >= self.pol.burst_limit_global:
+            return False
+        self._global_window.append(now)
+        return True
 
-    def subscribe_iter(self, topic: str, timeout: float = 30.0) -> Iterable[dict]:
-        t = self.ensure_topic(topic)
-        while True:
-            ev = t.get(timeout=timeout)
-            if ev is None:
-                # keep-alive
-                yield {"topic": topic, "type":"keepalive", "ts": time.time()}
-            else:
-                yield {"topic": topic, "type":"event", "ts": ev.ts, "data": ev.data}
+    async def publish(self, topic: str, payload: Any):
+        if not self._rate_limit_ok(topic):
+            return False
+        pr = self._priority_of(topic)
+        self._seq += 1
+        item = (pr, time.time(), self._seq, topic, payload)
+        heapq.heappush(self._pq, item)
+        await self._drain()
+        return True
+
+    async def _drain(self):
+        # מפיץ אל כל המנויים
+        while self._pq:
+            pr, ts, seq, topic, payload = heapq.heappop(self._pq)
+            q = self._subs.get(topic)
+            if q:
+                try:
+                    q.put_nowait(payload)
+                except asyncio.QueueFull:
+                    # אם הלקוח איטי—נפיל הודעות לוג לפני טלמטריה
+                    pass
+
+    def subscribe(self, topic: str, max_queue: int = 1000) -> asyncio.Queue:
+        q = asyncio.Queue(maxsize=max_queue)
+        self._subs[topic] = q
+        return q
+
 
 BROKER = Broker()

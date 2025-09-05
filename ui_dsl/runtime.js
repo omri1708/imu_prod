@@ -184,4 +184,104 @@
     applyGrid(document);
   }
   document.addEventListener('DOMContentLoaded', boot);
+
 })();
+
+/* eslint-disable */
+export class UIDSLRuntime {
+  constructor(rootEl, wsUrl) {
+    this.root = rootEl;
+    this.wsUrl = wsUrl;
+    this.tables = {};
+    this._connectWS();
+  }
+  _connectWS(){
+    const ws = new WebSocket(this.wsUrl);
+    ws.onmessage = (ev)=>{
+      const m = JSON.parse(ev.data);
+      if(m.type==="timeline"){
+        this._onTimeline(m);
+      } else if (m.type==="progress"){
+        this._onProgress(m);
+      }
+    };
+    this.ws = ws;
+  }
+  grid(containerId, spec){
+    // spec: {areas:[["hdr","hdr"],["nav","main"]], cols:"200px 1fr", rows:"64px 1fr", gap:"8px"}
+    const el = document.getElementById(containerId);
+    el.style.display = "grid";
+    el.style.gridTemplateColumns = spec.cols;
+    el.style.gridTemplateRows = spec.rows;
+    el.style.gap = spec.gap || "8px";
+    for(const row of spec.areas){
+      // areas for CSS named template
+    }
+  }
+  table(tableId, columns, {freezeLeft=0, freezeRight=0}={}){
+    const el = document.getElementById(tableId);
+    el.innerHTML = "";
+    const tbl = document.createElement("table");
+    const thead = document.createElement("thead");
+    const tr = document.createElement("tr");
+    columns.forEach((c,i)=>{
+      const th = document.createElement("th");
+      th.textContent = c.label || c.key;
+      th.dataset.key = c.key;
+      th.onclick = ()=> this._sort(tableId, c.key);
+      if(i<freezeLeft || i>=columns.length-freezeRight) th.classList.add("frozen");
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    tbl.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    tbl.appendChild(tbody);
+    el.appendChild(tbl);
+    this.tables[tableId] = {columns, data:[], sortKey:null, sortDir:1, tbody};
+  }
+  updateTable(tableId, rows){
+    const t = this.tables[tableId]; if(!t) return;
+    t.data = rows;
+    this._renderRows(tableId);
+  }
+  filter(tableId, predFn){   // client-side filter function(row)->bool
+    const t = this.tables[tableId]; if(!t) return;
+    t._filter = predFn; this._renderRows(tableId);
+  }
+  _sort(tableId, key){
+    const t = this.tables[tableId]; if(!t) return;
+    t.sortKey = key; t.sortDir *= -1;
+    this._renderRows(tableId);
+  }
+  _renderRows(tableId){
+    const t = this.tables[tableId]; if(!t) return;
+    let rows = t.data.slice();
+    if(t._filter) rows = rows.filter(t._filter);
+    if(t.sortKey) rows.sort((a,b)=> (a[t.sortKey] > b[t.sortKey] ? t.sortDir : -t.sortDir));
+    t.tbody.innerHTML = "";
+    for(const r of rows){
+      const tr = document.createElement("tr");
+      for(const c of t.columns){
+        const td = document.createElement("td");
+        td.textContent = r[c.key];
+        tr.appendChild(td);
+      }
+      t.tbody.appendChild(tr);
+    }
+  }
+  _onTimeline(m){
+    // מעדכן וידג'ט timeline ב-UI
+    const el = document.getElementById("timeline");
+    if(el){
+      const li = document.createElement("div");
+      li.textContent = `[${new Date().toISOString()}] ${m.event}`;
+      el.prepend(li);
+    }
+  }
+  _onProgress(m){
+    const el = document.getElementById("progress");
+    if(el){
+      el.value = m.value; el.max = m.total || 100;
+    }
+  }
+}

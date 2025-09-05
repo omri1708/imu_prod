@@ -1,5 +1,6 @@
 # api/http_api.py (שרת HTTP טהור stdlib + SSE)
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import json, threading, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Any
@@ -8,9 +9,106 @@ from synth.rollout import gated_rollout
 from stream.broker import BROKER
 from engine.events import emit_progress, emit_timeline
 from common.exc import ResourceRequired
+import asyncio, json
+from typing import Dict, Any
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Query
+from fastapi.responses import JSONResponse
+from stream.broker import Broker
+from engine.enforcer import enforce_claims, GroundingError
+from adapters.unity_cli import run_unity_build, ActionRequired as UnityReq
+from adapters.k8s_uploader import upload_dir_with_tar, deploy_k8s_job, ActionRequired as K8sReq
+
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
+
+
+app = FastAPI()
+BROKERS: Dict[str, Broker] = {}
+
+def broker_for(uid: str) -> Broker:
+    b = BROKERS.get(uid)
+    if not b:
+        b = Broker(uid)
+        BROKERS[uid] = b
+    return b
+
+@app.websocket("/events")
+async def events(ws: WebSocket, user: str = Query("default")):
+    await ws.accept()
+    b = broker_for(user)
+    sub_timeline = b.subscribe("timeline")
+    sub_progress = b.subscribe("progress")
+    try:
+        while True:
+            # שולחים לפי עדיפויות שכבר נאכפות ב-broker
+            done, _ = await asyncio.wait(
+                [asyncio.create_task(sub_timeline.get()), asyncio.create_task(sub_progress.get())],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                try:
+                    payload = task.result()
+                    await ws.send_text(json.dumps(payload))
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        return
+
+@app.post("/run_adapter")
+async def run_adapter(
+    user: str = Query("default"),
+    kind: str = Query(...),         # "unity_k8s"
+    claims: Dict[str, Any] = Body({"claims":[]}),
+    project_path: str = Body(...),
+    k8s_image: str = Body("alpine:3.19"),
+    artifact_server_url: str = Body("http://localhost:8089")
+):
+    b = broker_for(user)
+    try:
+        enforce_claims(user, claims.get("claims", []))
+    except GroundingError as e:
+        return JSONResponse({"ok": False, "error":"grounding", "detail": str(e)}, status_code=412)
+
+    if kind != "unity_k8s":
+        return JSONResponse({"ok": False, "error":"unknown_kind"}, status_code=400)
+
+    async def _run():
+        # 1) Unity build
+        try:
+            async for ev in run_unity_build(project_path):
+                await b.publish(ev["type"], ev)
+        except UnityReq as r:
+            await b.publish("timeline", {"type":"timeline","event":f"action_required: {r.what}"})
+            return JSONResponse({"ok": False, "action_required":{"what":r.what, "how": r.how}}, status_code=428)
+        # 2) upload to Artifact-Server
+        try:
+            from adapters.k8s_uploader import upload_dir_with_tar
+            res = upload_dir_with_tar(artifact_server_url, project_path + "/Builds/StandaloneLinux64")
+            await b.publish("timeline", {"type":"timeline","event":f"artifact: {res.get('hash')}"})
+        except Exception as e:
+            await b.publish("timeline", {"type":"timeline","event":f"artifact_upload_failed: {e}"})
+            return JSONResponse({"ok": False, "error":"artifact_upload_failed", "detail": str(e)}, status_code=500)
+        # 3) deploy job to k8s
+        try:
+            from adapters.k8s_uploader import deploy_k8s_job
+            env = {"ARTIFACT_HASH": res.get("hash","")}
+            dres = deploy_k8s_job("unity-runner", k8s_image, env)
+            await b.publish("timeline", {"type":"timeline","event":f"k8s_job: {dres}"})
+        except K8sReq as r:
+            await b.publish("timeline", {"type":"timeline","event":f"action_required: {r.what}"})
+            return JSONResponse({"ok": False, "action_required":{"what":r.what, "how": r.how}}, status_code=428)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error":"k8s_deploy_failed", "detail": str(e)}, status_code=500)
+
+        await b.publish("timeline", {"type":"timeline","event":"done"})
+        return JSONResponse({"ok": True})
+
+    # מריצים אסינכרוני ומחזירים תשובה ראשונית מידית
+    loop = asyncio.get_event_loop()
+    fut = loop.create_task(_run())
+    return JSONResponse({"ok": True, "started": True})
+
 
 def _new_job_id() -> str:
     import time, secrets

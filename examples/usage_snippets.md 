@@ -1,0 +1,15 @@
+## Unity
+POST /run_adapter
+{"name":"unity.build","params":{"project_dir":"examples/unity"},"task_id":"unity-1"}
+
+## Android
+{"name":"android.build","params":{"apk_out":"out/app.apk","project_dir":"examples/android_app","variant":"debug"},"task_id":"apk-1"}
+
+## iOS
+{"name":"ios.build","params":{"archive_out":"out/App","project_path":"examples/ios/App.xcodeproj","scheme":"App"},"task_id":"ios-1"}
+
+## CUDA (CPU fallback)
+{"name":"cuda.vadd","params":{"n":100000,"use_gpu":false},"task_id":"cuda-1"}
+
+## K8s
+{"name":"k8s.apply","params":{"yaml_text":"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: imu\n"},"task_id":"k8s-1"}

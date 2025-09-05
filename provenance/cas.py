@@ -2,10 +2,81 @@
 from __future__ import annotations
 import os, json, hashlib, time, stat, threading
 from typing import Optional, Dict, Any, Tuple, Iterable
+from dataclasses import dataclass, asdict
+
 
 class CASError(Exception): ...
 class IntegrityError(CASError): ...
 class NotFound(CASError): ...
+
+
+CAS_ROOT = os.environ.get("IMU_CAS_ROOT", ".imu_cas")
+
+
+os.makedirs(CAS_ROOT, exist_ok=True)
+
+@dataclass
+class EvidenceMeta:
+    source: str                    # URL/Path/Adapter
+    retrieved_at: float            # epoch seconds
+    ttl_seconds: int               # תוקף
+    trust: float                   # 0..1
+    content_type: str = "text/plain"
+    signature: Optional[str] = None # מקום לחתימה, אם קיימת
+
+def _hash_bytes(b: bytes) -> str:
+    h = hashlib.sha256(); h.update(b); return h.hexdigest()
+
+def put_blob(content: bytes, meta: EvidenceMeta) -> str:
+    h = _hash_bytes(content)
+    path_blob = os.path.join(CAS_ROOT, h)
+    path_meta = path_blob + ".json"
+    if not os.path.exists(path_blob):
+        with open(path_blob, "wb") as f: f.write(content)
+    with open(path_meta, "w", encoding="utf-8") as f:
+        json.dump(asdict(meta), f, ensure_ascii=False, indent=2)
+    return h
+
+def get_meta(hash_id: str) -> Optional[EvidenceMeta]:
+    p = os.path.join(CAS_ROOT, hash_id + ".json")
+    if not os.path.exists(p): return None
+    with open(p, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    return EvidenceMeta(**d)
+
+def get_blob(hash_id: str) -> Optional[bytes]:
+    p = os.path.join(CAS_ROOT, hash_id)
+    if not os.path.exists(p): return None
+    with open(p, "rb") as f: return f.read()
+
+def is_valid(hash_id: str, min_trust: float, now: Optional[float] = None) -> bool:
+    now = now or time.time()
+    m = get_meta(hash_id)
+    if not m: return False
+    if m.trust < min_trust: return False
+    if now > m.retrieved_at + m.ttl_seconds: return False
+    return True
+
+def _ensure_root():
+    os.makedirs(CAS_ROOT, exist_ok=True)
+
+def put_bytes(b: bytes, meta: Dict[str, Any]) -> str:
+    _ensure_root()
+    h = hashlib.sha256(b).hexdigest()
+    obj = os.path.join(CAS_ROOT, h)
+    if not os.path.exists(obj):
+        with open(obj, "wb") as f: f.write(b)
+        with open(obj + ".meta.json", "w", encoding="utf-8") as f:
+            meta = dict(meta or {})
+            meta["ts"] = time.time()
+            meta["sha256"] = h
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    return h
+
+def put_file(path: str, meta: Dict[str, Any]) -> str:
+    with open(path, "rb") as f:
+        cid = put_bytes(f.read(), {**meta, "path": path})
+    return cid
 
 def _sha256(data: bytes) -> str:
     h = hashlib.sha256(); h.update(data); return h.hexdigest()

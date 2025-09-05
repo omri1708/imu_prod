@@ -12,6 +12,22 @@ def _next_id(prefix: str) -> str:
     return f"{prefix}{_TL_COUNTER}"
 
 
+def render_progress(msgs: List[Dict[str,Any]]) -> str:
+    pct = 0
+    last = ""
+    for m in msgs:
+        if "pct" in m: pct = max(pct, m["pct"])
+        if "msg" in m: last = m["msg"]
+    return f"<div class='progress'><div class='bar' style='width:{pct}%'></div><span>{pct}% {last}</span></div>"
+
+
+def render_timeline(events: List[Dict[str,Any]]) -> str:
+    out = ["<ul class='timeline'>"]
+    for e in events:
+        out.append(f"<li><code>{e.get('event')}</code> {e}</li>")
+    out.append("</ul>")
+    return "\n".join(out)
+
 
 def render_progress_bars(bars: List[Dict[str, Any]]) -> str:
     """

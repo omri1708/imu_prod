@@ -30,7 +30,8 @@ from synth.canary import shadow_and_canary
 from synth.rollout import gated_rollout
 from synth.specs_adapter import parse_adapter_jobs
 from engine.adapter_registry import get_adapter
-
+from policy.policy_rules import PolicyRegistry, EvidenceGate, ProvenanceStore, TTLIndex
+from policy.enforce import PolicyEnforcer
 
 
 class PipelineError(Exception): ...
@@ -52,7 +53,7 @@ class SynthesisPipeline:
       - בידוד יכולות (quarantine)
       - Reputation כ-hook למדיניות (למשל ב-gates אחרים במערכת)
     """
-    def __init__(self, *, base_policy: Dict[str,Any], http_fetcher=None, sign_key_id: Optional[str]="root", now=None):
+    def __init__(self, policy_registry: PolicyRegistry, *, base_policy: Dict[str,Any], http_fetcher=None, sign_key_id: Optional[str]="root", now=None):
         self.policy = dict(base_policy or {})
         self._now = now or (lambda: time.time())
         self.responder = RespondStrict(base_policy=base_policy, http_fetcher=http_fetcher, sign_key_id=sign_key_id)
@@ -74,7 +75,27 @@ class SynthesisPipeline:
             self.policy["reputation"] = self.reputation
 
         self.step_impls: Dict[str, Callable[[Dict[str,Any]], Dict[str,Any]]] = {}
-
+        self.policy_registry = policy_registry
+        self.prov = ProvenanceStore()
+        self.ttl = TTLIndex()
+        self.gate = EvidenceGate()
+        self.enforcer = PolicyEnforcer(self.prov, self.ttl, self.gate)
+    
+    def respond(self, user_id: str, response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        response: { "text": "...", "claims": [ {id, label, evidence:[{uri, content, fetched_at, trust_tag, ...}], ... } ] }
+        אוכפים:
+         - policy per user
+         - evidence presence + trust + freshness
+         - TTL registration
+        """
+        pol = self.policy_registry.get_policy(user_id)
+        claims: List[Dict[str, Any]] = response.get("claims", [])
+        self.enforcer.assert_claims(pol, claims)
+        # Purge old TTL entries in the background/occasionally
+        self.ttl.purge_expired()
+        return {"ok": True, "policy": pol.trust_level, "claims": len(claims)}
+    
     def register(self, step: str, fn: Callable[[Dict[str,Any]], Dict[str,Any]]) -> None:
         self.step_impls[step] = fn
 
@@ -125,7 +146,6 @@ class SynthesisPipeline:
             self._slo_gate(step)
         return {"ok": True, "ctx": ctx, "p95": {k: v.p95() for k,v in self.trackers.items()}}
 
-    
     def run_once(self,
                 *,
                 ctx: Dict[str,Any],
@@ -161,6 +181,7 @@ AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")
 
 def _join(a: List, b: List) -> List:
     return list(a or []) + list(b or [])
+
 
 def run_pipeline(user: str, spec_text: str) -> Dict[str, Any]:
     t0 = time.time()

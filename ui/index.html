@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="he">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Live</title>
+<style>
+  #timeline { font-family: monospace; max-height: 220px; overflow-y: auto; border: 1px solid #ddd; padding: 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #eee; padding: 6px 8px; }
+  th.frozen, td.frozen { position: sticky; left: 0; background: #fafafa; z-index: 2; }
+</style>
+</head>
+<body>
+  <h3>Live Timeline</h3>
+  <div id="timeline"></div>
+  <h3>Progress</h3>
+  <progress id="progress" value="0" max="100"></progress>
+  <h3>Artifacts</h3>
+  <div id="artifacts"></div>
+
+  <h3>Build Controls</h3>
+  <form id="f">
+    <label>Project Path <input id="pp" style="width:360px" value="/path/to/UnityProject"/></label>
+    <label>K8s Image <input id="img" value="alpine:3.19"/></label>
+    <label>Artifact Server <input id="as" value="http://localhost:8089"/></label>
+    <button type="submit">Run Unity→K8s</button>
+  </form>
+
+  <script type="module">
+    import {UIDSLRuntime} from './runtime.js';
+    const ui = new UIDSLRuntime(document.body, `ws://${location.host}/events?user=default`);
+    document.getElementById("f").onsubmit = async (ev)=>{
+      ev.preventDefault();
+      const body = {
+        kind: "unity_k8s",
+        project_path: document.getElementById("pp").value,
+        k8s_image: document.getElementById("img").value,
+        artifact_server_url: document.getElementById("as").value,
+        claims: {claims:[/* כאן אפשר לשים hashes של ראיות CAS תקפות */]}
+      };
+      const r = await fetch("/run_adapter?user=default&kind=unity_k8s", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(body)
+      });
+      const j = await r.json();
+      console.log(j);
+    };
+  </script>
+</body>
+</html>
