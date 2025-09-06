@@ -40,6 +40,7 @@ from server.merge_guard_api import router as merge_guard_router
 from server.canary_controller import router as canary_router
 from server.canary_auto_api import router as auto_canary_router
 from server.gh_status_api import router as gh_status_router
+
 APP.include_router(gh_status_router)
 APP.include_router(auto_canary_router)
 APP.include_router(canary_router)

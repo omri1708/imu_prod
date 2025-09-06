@@ -24,6 +24,7 @@ INCLUDE = [
     ".imu/provenance",
     ".imu/artifacts",
     ".imu/runbook/history",
+    ".imu/decisions",
     "cas",
 ]
 

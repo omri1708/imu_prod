@@ -52,9 +52,15 @@ pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;ov
 const $=s=>document.querySelector(s);
 async function api(p,b){ const r=await fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j; }
 $("#btn_start").onclick=async()=>{
-  const body={user_id:"demo-user",namespace:$("#ns").value,app:$("#app").value,image:$("#img").value,total_replicas:parseInt($("#rep").value),canary_percent:parseInt($("#cp").value),probe_url:$("#pr").value,policy:{
-    max_error_rate:parseFloat($("#er").value),max_p95_ms:parseInt($("#p95").value),step_percent:parseInt($("#sp").value),hold_seconds:parseInt($("#hold").value),consecutive_ok_for_promote:parseInt($("#okn").value)
-  }};
+  const gate = {
+    evidences: [],  // אפשר למלא digest+min_trust אם תרצה
+    checks: null,   // owner/repo/ref/pr_number/required/mode/token_env
+    p95: null
+  };
+  const body={user_id:"demo-user",namespace:$("#ns").value,app:$("#app").value,image:$("#img").value,total_replicas:parseInt($("#rep").value),canary_percent:parseInt($("#cp").value),probe_url:$("#pr").value,
+    policy:{max_error_rate:parseFloat($("#er").value),max_p95_ms:parseInt($("#p95").value),step_percent:parseInt($("#sp").value),hold_seconds:parseInt($("#hold").value),consecutive_ok_for_promote:parseInt($("#okn").value)},
+    gatekeeper_required:true, gate: gate, gate_fail_rollback:true
+  };
   const j=await api('/auto_canary/start',body); $("#out").textContent=JSON.stringify(j,null,2);
 };
 $("#btn_status").onclick=async()=>{
@@ -65,7 +71,14 @@ function setPct(p){ $("#bar").style.width=Math.max(0,Math.min(100,p))+'%'; }
 (function connect(){
   const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=timeline`;
   const ws=new WebSocket(url);
-  ws.onmessage=ev=>{ try{ const o=JSON.parse(ev.data); row(o.note||o.type||'evt'); if(o.type==='progress'&&typeof o.pct==='number') setPct(o.pct);}catch(e){} };
+  ws.onmessage=ev=>{
+    try{
+      const o=JSON.parse(ev.data);
+      if(o.type==='gatekeeper'){ row('GATE ' + (o.note||'')); return; }
+      row(o.note||o.type||'evt');
+      if(o.type==='progress'&&typeof o.pct==='number') setPct(o.pct);
+    }catch(e){}
+  };
   ws.onclose=()=>setTimeout(connect,1500);
 })();
 </script>
