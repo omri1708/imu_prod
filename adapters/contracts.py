@@ -17,10 +17,10 @@ Status = Literal["ok","awaiting_consent","blocked","error"]
 
 @dataclass
 class AdapterResult:
-    status: Status
-    message: str
-    outputs: Dict[str,Any]
-    required: Optional[Dict[str,Any]] = None  # when awaiting_consent
+    ok: bool
+    detail: str
+    artifacts: Dict[str,Any]
+
 
 def require(resource: str, hint: str, commands: list[str]) -> AdapterResult:
     return AdapterResult(

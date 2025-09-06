@@ -9,6 +9,21 @@ import shutil, subprocess, json, tempfile, os
 from .contracts import AdapterResult, require
 
 
+
+
+
+def deploy_manifest(yaml_path:str, namespace:str="default") -> AdapterResult:
+    kubectl = shutil.which("kubectl")
+    if not kubectl:
+        return AdapterResult(False, "kubectl not found", {})
+    try:
+        out = subprocess.run([kubectl, "apply", "-f", yaml_path, "-n", namespace], capture_output=True, text=True, timeout=600)
+        ok = (out.returncode == 0)
+        return AdapterResult(ok, out.stderr if not ok else "ok", {"log": out.stdout})
+    except Exception as e:
+        return AdapterResult(False, str(e), {})
+
+
 def deploy_k8s_manifest(manifest_yaml: str, namespace: str="default") -> AdapterResult:
     kubectl = shutil.which("kubectl")
     if not kubectl:

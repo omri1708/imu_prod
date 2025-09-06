@@ -14,6 +14,29 @@ import shutil, subprocess, os, sys
 from .contracts import AdapterResult, require
 
 
+def unity_batchmode(project_path:str, build_target:str="Android") -> AdapterResult:
+    unity = _find_unity()
+    if not unity:
+        return AdapterResult(False, "Unity not found in PATH", {})
+    try:
+        out = subprocess.run([
+            unity, "-quit", "-batchmode",
+            "-projectPath", project_path,
+            "-buildTarget", build_target
+        ], capture_output=True, text=True, timeout=3600)
+        ok = (out.returncode == 0)
+        return AdapterResult(ok, out.stderr if not ok else "ok", {"log": out.stdout})
+    except Exception as e:
+        return AdapterResult(False, str(e), {})
+
+
+def _find_unity():
+    for exe in ("unity", "Unity", "/Applications/Unity/Hub/Editor/Unity.app/Contents/MacOS/Unity"):
+        if shutil.which(exe) or os.path.exists(exe):
+            return exe
+    return None
+
+
 def run_unity_cli(project_dir: str, target: str="StandaloneLinux64") -> AdapterResult:
     unity = shutil.which("unity-editor") or shutil.which("Unity") or shutil.which("Unity.exe")
     if not unity:

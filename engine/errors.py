@@ -8,6 +8,24 @@ class ResourceRequired(RuntimeError):
         self.what = what
         self.how_to_get = how_to_get
         
+
+class IMUError(Exception): pass
+
+class PolicyDenied(IMUError):
+    def __init__(self, reason:str): super().__init__(f"policy_denied: {reason}"); self.reason = reason
+
+class ResourceRequired(IMUError):
+    """
+    Raised רק כשבאמת אין דרך לספק את היכולת בקוד טהור/ללא תלות.
+    message כולל: מה חסר, איך מתקינים, ואישור-המשך נדרש/לא.
+    """
+    def __init__(self, capability:str, how_to:str, requires_consent:bool=True):
+        super().__init__(f"resource_required:{capability}")
+        self.capability = capability
+        self.how_to = how_to
+        self.requires_consent = requires_consent
+
+
 class GuardRejection(Exception):
     def __init__(self, reason: str, details: dict | None = None):
         super().__init__(reason)

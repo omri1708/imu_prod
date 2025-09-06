@@ -2,16 +2,32 @@
 # -*- coding: utf-8 -*-
 import os, shutil, subprocess
 from typing import Dict, Any, List
+import os, subprocess, shutil
+from typing import Dict, Any
 from common.exc import ResourceRequired
 from adapters.base import BuildAdapter, BuildResult
 from adapters.provenance_store import cas_put, evidence_for, register_evidence
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
+from .contracts import AdapterResult
 
 
 import os, subprocess, shutil
 from .contracts import AdapterResult, require
+
+
+def build_android_gradle(project_dir:str) -> AdapterResult:
+    gradlew = os.path.join(project_dir, "gradlew")
+    if not os.path.exists(gradlew):
+        return AdapterResult(False, "gradlew not found", {})
+    try:
+        out = subprocess.run([gradlew, "assembleRelease", "--no-daemon"], cwd=project_dir, capture_output=True, text=True, timeout=1800)
+        ok = (out.returncode == 0)
+        apk = _find_apk(project_dir)
+        return AdapterResult(ok, out.stderr if not ok else "ok", {"apk": apk, "log": out.stdout})
+    except Exception as e:
+        return AdapterResult(False, str(e), {})
 
 
 def _exists(cmd: str) -> bool:
@@ -37,13 +53,12 @@ def run_android_build(project_dir: str, variant: str="Debug") -> AdapterResult:
     except subprocess.CalledProcessError as e:
         return AdapterResult(status="error", message=f"Gradle failed: {e}", outputs={})
 
-def _find_apk(project_dir: str, variant: str) -> str:
-    # naive: scans common output folder
-    base = os.path.join(project_dir, "app", "build", "outputs", "apk", variant.lower())
-    for name in os.listdir(base):
-        if name.endswith(".apk"):
-            return os.path.join(base, name)
-    return base
+def _find_apk(root:str) -> str|None:
+    for dp,_,files in os.walk(root):
+        for f in files:
+            if f.endswith(".apk"):
+                return os.path.join(dp, f)
+    return None
 
 class AndroidAdapter(BuildAdapter):
     KIND = "android"

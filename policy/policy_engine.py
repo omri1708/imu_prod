@@ -1,11 +1,11 @@
 # imu_repo/policy/policy_engine.py
 from __future__ import annotations
 from typing import Dict, Any
-from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Literal
-
+import time, json, hashlib
+from typing import Dict, Any, Optional, Tuple
 
 DEFAULT_POLICY = {
     # רמות סיכון ומדיניות ברירת־מחדל
@@ -29,6 +29,68 @@ DEFAULT_POLICY = {
 
 Trust = Literal["unknown","low","medium","high","pinned"]
 Decision = Literal["allow","block","require_consent"]
+
+
+
+class PolicyViolation(Exception):
+    pass
+
+class TrustLevel:
+    # 0=לא אמין, 1=נמוך, 2=בינוני, 3=גבוה, 4=מוסמך
+    def __init__(self, level:int):
+        assert 0 <= level <= 4
+        self.level = level
+    def __int__(self): return self.level
+    def __repr__(self): return f"TrustLevel({self.level})"
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+class UserPolicy:
+    """
+    מדיניות קשיחה פר-משתמש:
+     - ttl_ms: חיי נתון/ראייה (פג-תוקף)
+     - min_trust: רמת אמון מינימלית למקור
+     - max_p95_ms: סף p95 לביצועים (Pipeline יבדוק)
+     - require_evidence: השבה מותרת רק אם יש Claims+Evidence מאומתת
+     - sandbox_caps: אילו יכולות מותרות (רשימת מזהים)
+    """
+    def __init__(self, user_id:str, ttl_ms:int, min_trust:int,
+                 max_p95_ms:int, require_evidence:bool, sandbox_caps:Tuple[str,...]):
+        self.user_id = user_id
+        self.ttl_ms = ttl_ms
+        self.min_trust = TrustLevel(min_trust)
+        self.max_p95_ms = max_p95_ms
+        self.require_evidence = require_evidence
+        self.sandbox_caps = set(sandbox_caps)
+
+    def allow_cap(self, cap_id:str):
+        return cap_id in self.sandbox_caps
+
+    def to_dict(self) -> Dict[str,Any]:
+        return {
+            "user_id": self.user_id, "ttl_ms": self.ttl_ms,
+            "min_trust": int(self.min_trust),
+            "max_p95_ms": self.max_p95_ms,
+            "require_evidence": self.require_evidence,
+            "sandbox_caps": sorted(self.sandbox_caps)
+        }
+
+class PolicyStore:
+    """אחסון מדיניות בזיכרון (אפשר להחליף ל-DB)."""
+    def __init__(self):
+        self._by_user: Dict[str,UserPolicy] = {}
+
+    def set_policy(self, p:UserPolicy):
+        self._by_user[p.user_id] = p
+
+    def get(self, user_id:str) -> Optional[UserPolicy]:
+        return self._by_user.get(user_id)
+
+    def snapshot_hash(self) -> str:
+        blob = json.dumps({u:p.to_dict() for u,p in sorted(self._by_user.items())}, sort_keys=True).encode()
+        return hashlib.sha256(blob).hexdigest()
+
 
 @dataclass
 class PolicyRule:

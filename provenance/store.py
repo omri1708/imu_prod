@@ -1,5 +1,6 @@
 # provenance/store.py
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import os, time, json, hashlib, base64
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
@@ -10,15 +11,86 @@ from typing import Optional, Dict
 from contracts.base import Artifact
 from typing import Dict, Any, Optional, Tuple
 import hashlib, json, os, time, threading
-
+import os, json, hashlib, time, base64, hmac
+from typing import Dict, Any, Optional
 
 class ResourceRequired(RuntimeError):
     def __init__(self, what:str, how:str):
         super().__init__(f"resource_required: {what}\nhow_to_provide: {how}")
         self.what=what; self.how=how
+class ProvenanceError(Exception): pass
+
 
 CAS_ROOT = os.environ.get("IMU_CAS_ROOT","./_imu_cas")
 os.makedirs(CAS_ROOT, exist_ok=True)
+
+
+class CAStore:
+    """
+    Content-Addressable store עם חתימה (HMAC) ורמות אמון.
+    קבצים/ראיות נשמרים לפי cid=sha256(content).
+    meta.json כולל:
+      { "cid":..., "created_ms":..., "source":..., "trust":0..4, "sig":... }
+    """
+    def __init__(self, root:str, secret_key:bytes):
+        self.root = root
+        self.key = secret_key
+        os.makedirs(self.root, exist_ok=True)
+
+    def _path(self, cid:str) -> str:
+        return os.path.join(self.root, cid)
+
+    def _meta_path(self, cid:str) -> str:
+        return os.path.join(self.root, f"{cid}.meta.json")
+
+    def put(self, content:bytes, source:str, trust:int) -> str:
+        cid = hashlib.sha256(content).hexdigest()
+        with open(self._path(cid), "wb") as f:
+            f.write(content)
+        meta = {
+            "cid": cid,
+            "created_ms": int(time.time()*1000),
+            "source": source,
+            "trust": trust
+        }
+        meta["sig"] = self._sign_meta(meta)
+        with open(self._meta_path(cid), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, sort_keys=True)
+        return cid
+
+    def get(self, cid:str) -> bytes:
+        p = self._path(cid)
+        if not os.path.exists(p):
+            raise ProvenanceError(f"cid not found: {cid}")
+        with open(p, "rb") as f:
+            return f.read()
+
+    def meta(self, cid:str) -> Dict[str,Any]:
+        p = self._meta_path(cid)
+        if not os.path.exists(p):
+            raise ProvenanceError(f"meta not found: {cid}")
+        with open(p, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        if not self._verify_meta(meta):
+            raise ProvenanceError("invalid meta signature")
+        return meta
+
+    def is_fresh_and_trusted(self, cid:str, ttl_ms:int, min_trust:int) -> bool:
+        m = self.meta(cid)
+        age = int(time.time()*1000) - int(m["created_ms"])
+        return age <= ttl_ms and int(m["trust"]) >= int(min_trust)
+
+    def _sign_meta(self, meta:Dict[str,Any]) -> str:
+        m = json.dumps({k:meta[k] for k in ["cid","created_ms","source","trust"]}, sort_keys=True).encode()
+        sig = hmac.new(self.key, m, hashlib.sha256).digest()
+        return base64.b64encode(sig).decode()
+
+    def _verify_meta(self, meta:Dict[str,Any]) -> bool:
+        try:
+            exp = self._sign_meta(meta)
+            return hmac.compare_digest(meta["sig"], exp)
+        except Exception:
+            return False
 
 @dataclass
 class Evidence:

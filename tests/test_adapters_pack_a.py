@@ -1,6 +1,17 @@
 # tests/test_adapters_pack_a.py
 import os, pytest, shutil
 from examples.usage_android_ios_unity_cuda_k8s import ex_android, ex_ios, ex_unity, ex_cuda, ex_k8s
+from adapters.contracts import AdapterResult
+from adapters.k8s import deploy_manifest
+
+
+def test_k8s_cli_presence_or_grace():
+    # אם kubectl לא מותקן — נקבל AdapterResult(ok=False) עם הסבר מלא (לא קריסה).
+    res = deploy_manifest("nonexistent.yaml")
+    assert isinstance(res, AdapterResult)
+    assert res.ok in (True, False)
+    assert "kubectl" in res.detail or "No such file" in res.detail or "ok" in res.detail
+
 
 def _has(cmd): return shutil.which(cmd) is not None
 

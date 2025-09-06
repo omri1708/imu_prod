@@ -32,8 +32,60 @@ from synth.specs_adapter import parse_adapter_jobs
 from engine.adapter_registry import get_adapter
 from policy.policy_rules import PolicyRegistry, EvidenceGate, ProvenanceStore, TTLIndex
 from policy.enforce import PolicyEnforcer
+import time
+from typing import Dict, Any, List, Callable
+from perf.measure import PerfRegistry
+from engine.enforcement import Enforcement
+from provenance.store import CAStore
+from policy.policy_engine import PolicyStore
 
 
+class PipelineError(Exception): pass
+
+class SynthesisPipeline:
+    """
+    plan -> generate -> test -> verify -> package
+    בכל שלב נאספת ראייה ונרשמת ל-CAStore עם trust ע"פ המקור.
+    לפני RESPOND — Enforcement.require_response_ok (TTL/Trust/p95/Evidence).
+    """
+    def __init__(self, perf:PerfRegistry, enforce:Enforcement, ca:CAStore):
+        self.perf = perf
+        self.enforce = enforce
+        self.ca = ca
+
+    def run(self, user_id:str, steps:Dict[str,Callable[[],Dict[str,Any]]]) -> Dict[str,Any]:
+        t0 = time.time()
+        claims: List[Dict[str,Any]] = []
+        out: Dict[str,Any] = {}
+
+        def step(name:str, trust:int=3):
+            s0 = time.time()
+            result = steps[name]()
+            ms = (time.time()-s0)*1000
+            self.perf.track(f"pipeline.{name}", ms)
+            # אם השלב מספק evidence_bytes — שומרים ומתעדים claim
+            ev = result.get("evidence_bytes")
+            src = result.get("evidence_source", name)
+            if ev:
+                cid = self.ca.put(ev, source=src, trust=trust)
+                claims.append({"step":name, "evidence_cid": cid, "source": src})
+            out[name] = {k:v for k,v in result.items() if k not in ("evidence_bytes",)}
+            return result
+
+        # ריצה
+        for name in ("plan","generate","test","verify","package"):
+            if name not in steps:
+                raise PipelineError(f"missing step: {name}")
+            step(name)
+
+        # אכיפה לפני תגובה
+        elapsed_ms = (time.time()-t0)*1000
+        self.perf.track("pipeline.total", elapsed_ms)
+        self.enforce.require_response_ok(user_id=user_id, claims=claims, perf_key="pipeline.total")
+
+        return {"ok": True, "claims": claims, "artifacts": out}
+
+#____old
 class PipelineError(Exception): ...
 
 @contextmanager
@@ -45,7 +97,7 @@ def _timed(tracker: P95Tracker):
         dt_ms = (time.time() - t0) * 1000.0
         tracker.add(dt_ms)
 
-class SynthesisPipeline:
+class _SynthesisPipeline:
     """
     פייפליין גנרי: spec -> plan -> generate -> test -> verify -> package -> canary -> rollout
     מוסיף:

@@ -14,17 +14,16 @@ import shutil, subprocess, os
 from .contracts import AdapterResult, require
 
 
-def run_cuda_job(cuda_src: str, out_bin: str) -> AdapterResult:
+def run_cuda_job(script:str) -> AdapterResult:
     nvcc = shutil.which("nvcc")
     if not nvcc:
-        return require("CUDA Toolkit (nvcc)", "Install NVIDIA CUDA toolkit matching your driver",
-                       ["# visit: https://developer.nvidia.com/cuda-downloads",
-                        "# then ensure nvcc on PATH"])
+        return AdapterResult(False, "nvcc not found", {})
     try:
-        subprocess.run([nvcc, cuda_src, "-o", out_bin], check=True)
-        return AdapterResult(status="ok", message="CUDA compile ok", outputs={"bin": out_bin})
-    except subprocess.CalledProcessError as e:
-        return AdapterResult(status="error", message=f"nvcc failed: {e}", outputs={})
+        out = subprocess.run(["bash","-lc", script], capture_output=True, text=True, timeout=7200)
+        ok = (out.returncode == 0)
+        return AdapterResult(ok, out.stderr if not ok else "ok", {"log": out.stdout})
+    except Exception as e:
+        return AdapterResult(False, str(e), {})
 
 class CUDAAdapter(BuildAdapter):
     KIND = "cuda"

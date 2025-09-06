@@ -6,18 +6,31 @@ import time, statistics
 
 
 class PerfWindow:
-    def __init__(self, size: int = 200):
-        self.size=size; self.samples: List[float]=[]
+    def __init__(self, capacity:int=200):
+        self.capacity = capacity
+        self.samples: List[float] = []
 
-    def add(self, secs: float):
-        self.samples.append(secs); 
-        if len(self.samples) > self.size: self.samples.pop(0)
+    def add(self, ms:float):
+        self.samples.append(ms)
+        if len(self.samples) > self.capacity:
+            self.samples.pop(0)
 
-    def snapshot(self) -> Dict[str, float]:
-        if not self.samples: return {"count":0, "p50":0.0, "p95":0.0, "avg":0.0}
-        s=sorted(self.samples); n=len(s)
-        p50=s[int(0.5*(n-1))]; p95=s[int(0.95*(n-1))]
-        return {"count": n, "p50": p50, "p95": p95, "avg": sum(s)/n}
+    def p95(self) -> float:
+        if not self.samples:
+            return 0.0
+        s = sorted(self.samples)
+        idx = int(0.95*(len(s)-1))
+        return s[idx]
+
+class PerfRegistry:
+    def __init__(self):
+        self._by_key: Dict[str,PerfWindow] = {}
+
+    def track(self, key:str, elapsed_ms:float):
+        self._by_key.setdefault(key, PerfWindow()).add(elapsed_ms)
+
+    def summary(self) -> Dict[str,Any]:
+        return {k: {"count":len(w.samples), "p95_ms":w.p95()} for k,w in self._by_key.items()}
 
 BUILD_PERF = PerfWindow()
 JOB_PERF   = PerfWindow()

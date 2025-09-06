@@ -9,9 +9,6 @@ from adapters.provenance_store import cas_put, evidence_for, register_evidence
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
-
-
-import shutil, subprocess
 from .contracts import AdapterResult, require
 
 
@@ -26,6 +23,18 @@ def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> Adapter
     except subprocess.CalledProcessError as e:
         return AdapterResult(status="error", message=f"xcodebuild failed: {e}", outputs={})
     
+
+def build_ios_xcodeproj(project_path:str, scheme:str, sdk:str="iphoneos") -> AdapterResult:
+    if not os.path.exists(project_path):
+        return AdapterResult(False, "xcodeproj not found", {})
+    try:
+        out = subprocess.run([
+            "xcodebuild", "-project", project_path, "-scheme", scheme, "-sdk", sdk, "build"
+        ], capture_output=True, text=True, timeout=1800)
+        ok = (out.returncode == 0)
+        return AdapterResult(ok, out.stderr if not ok else "ok", {"log": out.stdout})
+    except Exception as e:
+        return AdapterResult(False, str(e), {})
 
 class IOSAdapter(BuildAdapter):
     KIND = "ios"
