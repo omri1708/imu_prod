@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cp.fullname" . }}-ws
+  namespace: {{ .Values.namespace }}
+  labels: { app: {{ include "cp.fullname" . }}, tier: ws }
+spec:
+  replicas: {{ .Values.replicas.ws }}
+  selector:
+    matchLabels: { app: {{ include "cp.fullname" . }}, tier: ws }
+  template:
+    metadata:
+      labels: { app: {{ include "cp.fullname" . }}, tier: ws }
+    spec:
+      containers:
+      - name: ws
+        image: "{{ .Values.images.ws.repository }}:{{ .Values.images.ws.tag }}"
+        imagePullPolicy: "{{ .Values.images.ws.pullPolicy }}"
+        ports:
+        - containerPort: {{ .Values.service.wsPort }}
+        # מצופה שה-image יפעיל: python server/stream_wfq_ws.py (מאזין על 8766)

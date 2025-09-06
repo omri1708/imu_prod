@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cp.fullname" . }}-api
+  namespace: {{ .Values.namespace }}
+  labels: { app: {{ include "cp.fullname" . }}, tier: api }
+spec:
+  replicas: {{ .Values.replicas.api }}
+  selector:
+    matchLabels: { app: {{ include "cp.fullname" . }}, tier: api }
+  template:
+    metadata:
+      labels: { app: {{ include "cp.fullname" . }}, tier: api }
+    spec:
+      containers:
+      - name: api
+        image: "{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}"
+        imagePullPolicy: "{{ .Values.images.api.pullPolicy }}"
+        ports:
+        - containerPort: {{ .Values.service.apiPort }}
+        # מצופה שה-image יפעיל: uvicorn server.http_api:APP --host 0.0.0.0 --port 8000
