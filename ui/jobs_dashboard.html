@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Job Runs Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+canvas{width:100%;height:160px;background:#0e1630;border:1px solid #233259;border-radius:8px}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Job Runs</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+  <span class="badge" id="stamp">—</span>
+</header>
+<main>
+  <div class="card">
+    <h3>Summary (last 24h)</h3>
+    <table id="tbl"><thead><tr><th>kind</th><th>count</th><th>ok</th><th>fail</th><th>avg (ms)</th><th>p95</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h3>Mini Bar (p95)</h3>
+    <canvas id="bar"></canvas>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function load(){
+  const r=await fetch('/metrics/jobs/summary?hours=24'); const j=await r.json();
+  $("#stamp").textContent=new Date().toLocaleTimeString();
+  const tb=$("#tbl tbody"); tb.innerHTML='';
+  const kinds = j.kinds||{};
+  const barData=[];
+  Object.keys(kinds).sort().forEach(k=>{
+    const m=kinds[k];
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${k}</td><td>${m.count}</td><td>${m.ok}</td><td>${m.fail}</td><td>${m.avg_ms}</td><td>${m.p95_ms}</td>`;
+    tb.appendChild(tr);
+    barData.push({k, v:m.p95_ms});
+  });
+  drawBar(barData);
+  setTimeout(load, 1500);
+}
+function drawBar(arr){
+  const c=$("#bar"); const ctx=c.getContext('2d'); const w=c.width; const h=c.height;
+  ctx.clearRect(0,0,w,h);
+  const max = Math.max(1, ...arr.map(x=>x.v));
+  const bw = (w-20)/(arr.length||1);
+  ctx.fillStyle="#4ea1ff";
+  arr.forEach((x,i)=>{
+    const bh = Math.max(2, Math.floor((x.v/max)*(h-20)));
+    ctx.fillRect(10+i*bw, h-10-bh, Math.max(6,bw-6), bh);
+  });
+}
+load();
+</script>
+</body>
+</html>

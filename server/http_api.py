@@ -41,9 +41,15 @@ from server.canary_controller import router as canary_router
 from server.canary_auto_api import router as auto_canary_router
 from server.gh_status_api import router as gh_status_router
 from server.scheduler_api import router as scheduler_router, scheduler_boot
+from server.metrics_jobs_api import router as jobs_metrics_router
+from server.stream_policy_router import start_policy_router
 
 APP.include_router(scheduler_router)
+
 scheduler_boot()
+start_policy_router()
+
+APP.include_router(jobs_metrics_router)
 APP.include_router(gh_status_router)
 APP.include_router(auto_canary_router)
 APP.include_router(canary_router)
