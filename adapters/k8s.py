@@ -9,7 +9,10 @@ import shutil, subprocess, json, tempfile, os
 from .contracts import AdapterResult, require
 from adapters.base import AdapterBase, PlanResult
 from engine.policy import RequestContext
-
+import subprocess, shlex, tempfile, os
+from typing import Dict, Any, List, Tuple
+from engine.provenance import Evidence
+from engine.policy import UserSpacePolicy
 
 
 
@@ -47,6 +50,32 @@ def deploy_k8s_manifest(manifest_yaml: str, namespace: str="default") -> Adapter
 class K8sAdapter(AdapterBase):
     """בניית מניפסט K8s ו-rollout מדורג."""
     name = "k8s"
+
+    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
+        manifest = args.get("manifest_yaml")
+        if not manifest:
+            raise ValueError("missing manifest_yaml")
+        # כותבים לקובץ זמני כדי לאפשר kubectl apply -f
+        tmp = args.get("_tmp_path") or tempfile.mkstemp(prefix="imu_", suffix=".yaml")[1]
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(manifest)
+        cmd = ["bash","-lc", f"kubectl apply -f {shlex.quote(tmp)}{' --dry-run=client' if args.get('dry_run',True) else ''}"]
+        # שומרים היכן הכתיבה לצורך ניקוי עתידי (אם תרצה)
+        args["_tmp_path"] = tmp
+        return cmd
+
+    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=policy.p95_ms/1000)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", "timeout"
+        return proc.returncode==0, out, err
+
+    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
+        return [Evidence(claim="k8s.apply.plan", source="adapters.k8s", trust=0.75, extra={"cmd":cmd,"tmp":args.get('_tmp_path')})]
+
     def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
         ns = spec.get("namespace","default")
         file = spec.get("manifest","deploy.yaml")

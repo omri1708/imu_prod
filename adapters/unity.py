@@ -14,6 +14,11 @@ import shutil, subprocess, os, sys
 from .contracts import AdapterResult, require
 from adapters.base import AdapterBase, PlanResult
 from engine.policy import RequestContext
+import shlex, subprocess
+from typing import Dict, Any, List, Tuple
+from engine.provenance import Evidence
+from engine.policy import UserSpacePolicy
+
 
 def unity_batchmode(project_path:str, build_target:str="Android") -> AdapterResult:
     unity = _find_unity()
@@ -56,6 +61,25 @@ def run_unity_cli(project_dir: str, target: str="StandaloneLinux64") -> AdapterR
 class UnityAdapter(AdapterBase, BuildAdapter):
     KIND = "unity"
     name = "unity"
+    
+    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
+        project_path = args.get("project_path","./UnityProject")
+        build_target = args.get("build_target","StandaloneLinux64")
+        method = args.get("method","Builder.PerformBuild")
+        cmd = ["bash","-lc", f'unity -batchmode -nographics -projectPath {shlex.quote(project_path)} -buildTarget {shlex.quote(build_target)} -executeMethod {shlex.quote(method)} -quit']
+        return cmd
+
+    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=policy.p95_ms/1000)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", "timeout"
+        return proc.returncode==0, out, err
+
+    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
+        return [Evidence(claim="unity.build.plan", source="adapters.unity", trust=0.7, extra={"cmd":cmd,"args":args})]
     
     def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
         proj = spec.get("projectPath",".")

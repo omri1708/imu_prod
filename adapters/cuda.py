@@ -6,7 +6,10 @@ from common.exc import ResourceRequired
 from adapters.base import BuildAdapter, BuildResult
 from adapters.provenance_store import cas_put, evidence_for, register_evidence
 
-
+import subprocess, shlex
+from typing import Dict, Any, List, Tuple
+from engine.provenance import Evidence
+from engine.policy import UserSpacePolicy
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
@@ -29,7 +32,27 @@ def run_cuda_job(script:str) -> AdapterResult:
 class CUDAAdapter(AdapterBase, BuildAdapter):
     KIND = "cuda"
     name = "cuda"
-    
+
+    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
+        script = args.get("script","/usr/local/bin/run_cuda_job.sh")
+        job_args = args.get("job_args",[])
+        sh = " ".join(shlex.quote(str(x)) for x in job_args)
+        cmd = ["bash","-lc", f"{shlex.quote(script)} {sh}"]
+        return cmd
+
+    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=policy.p95_ms/1000)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", "timeout"
+        return proc.returncode==0, out, err
+
+    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
+        return [Evidence(claim="cuda.job.plan", source="adapters.cuda", trust=0.7, extra={"cmd":cmd,"args":args})]
+
+
     def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
         src = spec.get("src","kernel.cu")
         out = spec.get("out","kernel.out")

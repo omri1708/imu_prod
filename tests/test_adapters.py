@@ -6,7 +6,9 @@ import builtins
 import subprocess
 import shutil
 import pytest
-
+import json
+from fastapi.testclient import TestClient
+from server.main import app
 from contracts.base import ResourceRequired, ContractError, Artifact
 from provenance.store import ProvenanceStore
 
@@ -17,6 +19,43 @@ class DummyProc:
         self.returncode = rc
         self.stdout = out
         self.stderr = err
+
+client = TestClient(app)
+
+def test_android_dry_run_build_cmd():
+    payload = {
+        "adapter": "android",
+        "args": {"project_dir":"./android_app","task":"assembleDebug"},
+        "dry_run": True
+    }
+    r = client.post("/run_adapter", json=payload)
+    assert r.status_code == 200
+    data = r.json()
+    assert "gradle" in " ".join(data["cmd"])
+
+def test_k8s_dry_run_apply():
+    manifest = """
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example
+data:
+  foo: bar
+"""
+    r = client.post("/run_adapter", json={"adapter":"k8s","args":{"manifest_yaml":manifest, "dry_run": True}})
+    assert r.status_code == 200
+    out = r.json()
+    assert "kubectl" in " ".join(out["cmd"])
+
+def test_request_and_continue_missing_android_tools():
+    r = client.post("/capabilities/request", json={"capability":"android", "auto_install": False})
+    assert r.status_code == 200
+    data = r.json()
+    # או OK אם מותקן, או REQUIRED עם missing
+    assert data["status"] in ("OK","REQUIRED")
+    if data["status"] == "REQUIRED":
+        assert isinstance(data["missing"], list)
+
 
 def fake_run_ok_success(cmd, cwd=None, env=None):
     return DummyProc(0, out="ok", err="")

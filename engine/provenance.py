@@ -1,9 +1,11 @@
 # imu_repo/engine/provenance.py
 from __future__ import annotations
 import time, hmac, hashlib
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 import hashlib, json, time, os
 from dataclasses import dataclass
+
+from pydantic import BaseModel, Field
 
 
 class ProvenanceError(Exception): ...
@@ -17,15 +19,43 @@ L2_SIGNED = 2
 L3_SIGNED_FRESH = 3
 
 @dataclass
-class Evidence:
+class Evidence(BaseModel):
     kind: str        # "installer_log" | "artifact" | "command_plan" | "signature"
     content: bytes
     meta: Dict[str, Any]
+    claim: str
+    source: str
+    trust: float
+    ttl_seconds: int = 3600
+    timestamp: float = Field(default_factory=lambda: time.time())
+    extra: Dict[str, Any] = Field(default_factory=dict)
+    signature: Optional[str] = None
+    cas_key: Optional[str] = None
 
 class ProvenanceStore:
     def __init__(self, root="var/prov"):
         self.root = root
         os.makedirs(self.root, exist_ok=True)
+        self._store: Dict[str, Evidence] = {}
+
+    def _cas(self, ev: Evidence) -> str:
+        blob = json.dumps({"claim":ev.claim,"source":ev.source,"extra":ev.extra}, sort_keys=True).encode()
+        return hashlib.sha256(blob).hexdigest()
+
+    def add_evidence(self, ev: Evidence) -> str:
+        ev.cas_key = self._cas(ev)
+        # חתימה "פנימית" פשוטה (ללא PKI — ניתן להחליף ל־ed25519)
+        ev.signature = hashlib.sha256((ev.cas_key + "|sig").encode()).hexdigest()
+        self._store[ev.cas_key] = ev
+        return ev.cas_key
+
+    def get(self, cas_key: str) -> Optional[Evidence]:
+        return self._store.get(cas_key)
+
+    def list(self) -> List[Evidence]:
+        # מסנן פריטים שפג תוקפם
+        now = time.time()
+        return [e for e in self._store.values() if (e.timestamp + e.ttl_seconds) > now]
 
     def put(self, ev: Evidence) -> str:
         h = hashlib.sha256(ev.content).hexdigest()

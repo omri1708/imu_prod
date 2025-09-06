@@ -13,6 +13,10 @@ from .contracts import AdapterResult, require
 
 from adapters.base import AdapterBase, PlanResult
 from engine.policy import RequestContext
+import shlex, subprocess
+from typing import Dict, Any, List, Tuple
+from engine.provenance import Evidence
+from engine.policy import UserSpacePolicy
 
 
 def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> AdapterResult:
@@ -42,6 +46,26 @@ def build_ios_xcodeproj(project_path:str, scheme:str, sdk:str="iphoneos") -> Ada
 class IOSAdapter(AdapterBase, BuildAdapter):
     KIND = "ios"
     name = "ios"
+    
+    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
+        workspace = args.get("workspace","MyApp.xcworkspace")
+        scheme = args.get("scheme","MyApp")
+        configuration = args.get("configuration","Release")
+        cmd = ["bash","-lc", f"xcodebuild -workspace {shlex.quote(workspace)} -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} build"]
+        return cmd
+
+    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=policy.p95_ms/1000)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", "timeout (p95 exceeded)"
+        return proc.returncode==0, out, err
+
+    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
+        return [Evidence(claim="ios.build.plan", source="adapters.ios", trust=0.7, extra={"cmd":cmd,"args":args})]    
+
     def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
         scheme = spec.get("scheme","App")
         cfg = spec.get("configuration","Debug")

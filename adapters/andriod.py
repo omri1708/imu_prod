@@ -1,7 +1,7 @@
 # adapters/android.py
 # -*- coding: utf-8 -*-
-import os, shutil, subprocess
-from typing import Dict, Any, List
+import os, shutil, subprocess, shlex
+from typing import Dict, Any, List, Tuple
 
 
 from common.exc import ResourceRequired
@@ -14,6 +14,8 @@ from .contracts import AdapterResult, require
 from adapters.base import AdapterBase, PlanResult
 from engine.policy import RequestContext
 
+from engine.provenance import Evidence
+from engine.policy import UserSpacePolicy
 
 def build_android_gradle(project_dir:str) -> AdapterResult:
     gradlew = os.path.join(project_dir, "gradlew")
@@ -62,6 +64,24 @@ class AndroidAdapter(AdapterBase, BuildAdapter):
     KIND = "android"
     name = "android"
     
+    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
+        project_dir = args.get("project_dir","./android")
+        task = args.get("task","assembleRelease")
+        cmd = ["bash","-lc", f"cd {shlex.quote(project_dir)} && gradle {shlex.quote(task)}"]
+        return cmd
+
+    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=policy.p95_ms/1000)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", "timeout (p95 exceeded)"
+        return proc.returncode==0, out, err
+
+    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
+        return [Evidence(claim="android.build.plan", source="adapters.android", trust=0.7, extra={"cmd":cmd,"args":args})]
+
     def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
         module = spec.get("module", "app")
         variant = spec.get("variant", "Debug")
