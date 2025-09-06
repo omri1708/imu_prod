@@ -1,111 +1,155 @@
 <!doctype html>
-<html lang="he">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>IMU Live</title>
+<title>IMU UI-DSL Live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  #timeline { font-family: monospace; max-height: 220px; overflow-y: auto; border: 1px solid #ddd; padding: 8px; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #eee; padding: 6px 8px; }
-  th.frozen, td.frozen { position: sticky; left: 0; background: #fafafa; z-index: 2; }
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, sans-serif; margin: 0; background: #0b1020; color: #e6edf3; }
+header { padding: 12px 16px; background: #11162a; border-bottom: 1px solid #1f2a44; display:flex; align-items:center; gap:12px; }
+.badge { background:#243152; padding:2px 8px; border-radius:999px; font-size:12px; color:#9fb7ff; border:1px solid #355; }
+main { display:grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 54px); }
+aside { border-right: 1px solid #1f2a44; padding:12px; }
+section { padding:16px; }
+.card { background:#12172d; border:1px solid #233259; border-radius:10px; padding:12px; margin-bottom:12px; }
+.progress { height: 8px; background:#1a2240; border-radius:999px; overflow:hidden; }
+.progress > div { height:100%; width:0%; background:linear-gradient(90deg,#4ea1ff,#7cf); transition: width .25s ease; }
+.timeline { max-height: 50vh; overflow:auto; }
+.row { display:flex; align-items:center; gap:8px; }
+label { display:block; font-size:12px; color:#8ea2d8; }
+input, select, button, textarea { background:#0e1630; border:1px solid #233259; color:#e6edf3; border-radius:8px; padding:8px; font-size:14px; }
+input:focus, select:focus, textarea:focus { outline:none; border-color:#4ea1ff; box-shadow:0 0 0 2px #4ea1ff33; }
+kbd { background:#0e1630; border:1px solid #233259; padding:2px 6px; border-radius:6px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; background:#0e1630; padding:6px 8px; border-radius:8px; border:1px solid #233259; }
+.grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; }
 </style>
 </head>
 <body>
-  <h3>Live Timeline</h3>
-  <div id="timeline"></div>
-  <h3>Progress</h3>
-  <progress id="progress" value="0" max="100"></progress>
-  <h3>Artifacts</h3>
-  <div id="artifacts"></div>
+<header>
+  <strong>IMU Console</strong>
+  <span class="badge">WS live</span>
+  <span id="ws_state" class="badge" style="color:#aaa">connecting…</span>
+</header>
+<main>
+  <aside>
+    <div class="card">
+      <h3>Run Adapter (dry-run)</h3>
+      <label>Kind</label>
+      <select id="kind">
+        <option>unity.build</option>
+        <option>android.gradle</option>
+        <option>ios.xcode</option>
+        <option>k8s.kubectl.apply</option>
+        <option>cuda.nvcc</option>
+      </select>
+      <label>Params (JSON)</label>
+      <textarea id="params" rows="8">{ "project": "/path/to/UnityProj", "target":"Android", "method":"Builder.PerformBuild", "version":"2022.3.44f1", "log": "/tmp/unity.log" }</textarea>
+      <div class="row">
+        <button id="btn_dry">Dry-Run</button>
+        <button id="btn_exec">Execute</button>
+      </div>
+      <pre class="code" id="cmd_out"># command will appear here</pre>
+      <div class="progress"><div id="prog_bar"></div></div>
+    </div>
 
-  <h3>Build Controls</h3>
-  <form id="f">
-    <label>Project Path <input id="pp" style="width:360px" value="/path/to/UnityProject"/></label>
-    <label>K8s Image <input id="img" value="alpine:3.19"/></label>
-    <label>Artifact Server <input id="as" value="http://localhost:8089"/></label>
-    <button type="submit">Run Unity→K8s</button>
-  </form>
+    <div class="card">
+      <h3>Capability Request</h3>
+      <label>Capability ID</label>
+      <input id="cap_id" value="unity.hub"/>
+      <button id="btn_cap">Get Install Command</button>
+      <pre class="code" id="cap_out"># command will appear here</pre>
+    </div>
+  </aside>
 
-  <script type="module">
-    import {UIDSLRuntime} from './runtime.js';
-    const ui = new UIDSLRuntime(document.body, `ws://${location.host}/events?user=default`);
-    document.getElementById("f").onsubmit = async (ev)=>{
-      ev.preventDefault();
-      const body = {
-        kind: "unity_k8s",
-        project_path: document.getElementById("pp").value,
-        k8s_image: document.getElementById("img").value,
-        artifact_server_url: document.getElementById("as").value,
-        claims: {claims:[/* כאן אפשר לשים hashes של ראיות CAS תקפות */]}
-      };
-      const r = await fetch("/run_adapter?user=default&kind=unity_k8s", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(body)
-      });
-      const j = await r.json();
-      console.log(j);
-    };
-  </script>
-</body>
-</html>
-
-<!doctype html>
-<html lang="he" dir="rtl">
-<head>
-<meta charset="utf-8"/>
-<title>IMU – Progress & Timeline</title>
-<style>
-body { font-family: system-ui, sans-serif; margin: 24px; }
-#prog { width: 100%; height: 12px; background: #eee; border-radius: 6px; overflow: hidden; margin-bottom: 16px; }
-#bar { height: 100%; width: 0%; background: #4caf50; transition: width 200ms; }
-#timeline { max-height: 50vh; overflow:auto; border:1px solid #ddd; padding:8px; }
-.ev { border-bottom:1px dashed #ddd; padding:6px 0; }
-.ev .k { color:#888; font-size:12px; }
-</style>
-</head>
-<body>
-<h1>IMU – Live Progress & Timeline</h1>
-<div id="prog"><div id="bar"></div></div>
-<div id="timeline"></div>
+  <section>
+    <div class="card">
+      <h3>Live Timeline</h3>
+      <div class="timeline" id="timeline"></div>
+    </div>
+    <div class="card">
+      <h3>Policy</h3>
+      <pre class="code" id="policy_dump"></pre>
+    </div>
+  </section>
+</main>
 
 <script>
-const bar = document.getElementById('bar');
-const timeline = document.getElementById('timeline');
-let pct = 0;
+const $ = sel => document.querySelector(sel);
 
-function addEv(obj){
+function appendEvent(evt) {
+  const host = $("#timeline");
   const div = document.createElement('div');
-  div.className = 'ev';
-  div.innerHTML = `<div class="k">${new Date().toLocaleTimeString()}</div><pre>${JSON.stringify(obj, null, 2)}</pre>`;
-  timeline.prepend(div);
+  div.className = 'row';
+  div.innerHTML = `<span class="badge">${new Date(evt.ts*1000).toLocaleTimeString()}</span>
+                   <span>${evt.kind || evt.type}</span>
+                   <span class="code">${evt.msg || ""}</span>`;
+  host.prepend(div);
 }
 
-function bumpProgress(delta=3){
-  pct = Math.min(100, pct + delta);
-  bar.style.width = pct + '%';
+function setProgress(pct) {
+  $("#prog_bar").style.width = Math.max(0, Math.min(100, pct)) + "%";
 }
 
-const ws = new WebSocket(`ws://${location.hostname}:8080/ws`);
-ws.onopen = () => addEv({kind:"ws_open"});
-ws.onmessage = ev => {
-  try {
-    const obj = JSON.parse(ev.data);
-    addEv(obj);
-    if (obj.kind === 'capability_request') bumpProgress(5);
-    if (obj.kind === 'adapter_dry_run') bumpProgress(2);
-  } catch (e) {
-    addEv({kind:"parse_error", msg:e.toString()});
+async function fetchPolicy() {
+  const r = await fetch('/api/policy/network/demo-user');
+  if (r.ok) {
+    const j = await r.json();
+    $("#policy_dump").textContent = JSON.stringify(j, null, 2);
   }
-};
-ws.onclose = () => addEv({kind:"ws_close"});
+}
 
-// דוגמת קריאה ל-HTTP לבקש יכולת (dry-run)
-fetch('http://'+location.hostname+':8081/capabilities/request', {
-  method: 'POST',
-  headers: {'Content-Type':'application/json'},
-  body: JSON.stringify({ name: "k8s_cli", dry_run: true, user_id:"demo", trust_level:2, allow_exec:false, allow_network:false })
-}).then(r => r.json()).then(j => addEv({kind:"http_reply", j}));
+async function dryRun(execute=false) {
+  try {
+    const kind = $("#kind").value;
+    const params = JSON.parse($("#params").value);
+    const r = await fetch('/adapters/' + (execute ? 'run' : 'dry_run'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user_id: 'demo-user', kind, params, execute })
+    });
+    const j = await r.json();
+    $("#cmd_out").textContent = JSON.stringify(j, null, 2);
+    if (j.ok) { appendEvent({ ts: Date.now()/1000, kind:'dry-run', msg: j.cmd }); }
+    else { appendEvent({ ts: Date.now()/1000, kind:'blocked', msg: j.reason }); }
+  } catch (e) {
+    $("#cmd_out").textContent = 'error: ' + e;
+  }
+}
+
+async function requestCapability() {
+  const cap = $("#cap_id").value;
+  const r = await fetch('/capabilities/request', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({ user_id: 'demo-user', capability: cap })
+  });
+  const j = await r.json();
+  $("#cap_out").textContent = JSON.stringify(j, null, 2);
+  appendEvent({ ts: Date.now()/1000, kind:'capability', msg: j.command || j.error });
+}
+
+$("#btn_dry").onclick = () => dryRun(false);
+$("#btn_exec").onclick = () => dryRun(true);
+$("#btn_cap").onclick = requestCapability;
+
+fetchPolicy();
+
+// WebSocket live updates
+(function connectWS(){
+  try {
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host.replace(/:\d+/, ':8765'));
+    $("#ws_state").textContent = 'connecting…';
+    ws.onopen = () => { $("#ws_state").textContent = 'connected'; ws.send(JSON.stringify({type:'hello'})); };
+    ws.onclose = () => { $("#ws_state").textContent = 'disconnected'; setTimeout(connectWS, 1500); };
+    ws.onmessage = (ev) => {
+      const evt = JSON.parse(ev.data);
+      if (evt.type === 'progress') setProgress(evt.pct || 0);
+      appendEvent({...evt, ts: evt.ts || Date.now()/1000});
+    };
+  } catch (e) {
+    $("#ws_state").textContent = 'error';
+  }
+})();
 </script>
 </body>
 </html>

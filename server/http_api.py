@@ -1,242 +1,179 @@
 # server/http_api.py
+# FastAPI:
+#  - /adapters/dry_run  (הרכבת פקודה דטרמיניסטית + provenance + gating ראשוני)
+#  - /adapters/run      (אותה פקודה; ריצה אמיתית אם execute=True, כולל evidence של הפלט)
+#  - /capabilities/request  (מדיניות "לבקש ולהמשיך": פקודת התקנה מדויקת לכל OS/מנג'ר)
+#  - /api/policy/network/{user_id}  (הצגת פוליסי רשת פעיל)
+
 from __future__ import annotations
-from fastapi import FastAPI, HTTPException, Body
-from pydantic import BaseModel
-from typing import List, Optional
-from policy.policy_engine import policy_store, UserPolicy, Limits, NetRule, FsRule, PolicyViolation
-from adapters import android, ios, unity, cuda, k8s
-from provenance.signing import gen_keypair, cas_put_file, Evidence
-from wsgiref.simple_server import make_server
-from urllib.parse import parse_qs
-import json, os, mimetypes
-from broker.stream import broker, _Sub
-from broker.policy import DropPolicy
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
-from engine.policy import AskAndProceedPolicy, UserSubspace, RequestContext
-from engine.provenance import ProvenanceStore
-from capabilities.manager import CapabilityManager
-from streaming.broker import StreamBroker
+import os, json, hashlib, asyncio, time, subprocess, shlex, platform, shutil
+from typing import Dict, Any, Optional, List
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-STATIC_DIR = os.environ.get("IMU_STATIC_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_dsl")))
-REGISTRY = {
-    "android_sdk": {"installer": ["echo installing_android_sdk"], "min_trust": 1, "needs_network": False, "ttl_hint": 86400},
-    "ios_xcode":  {"installer": ["echo installing_xcode_tools"], "min_trust": 2, "needs_network": False, "ttl_hint": 86400},
-    "unity_cli":  {"installer": ["echo installing_unity_cli"], "min_trust": 1, "needs_network": False},
-    "cuda_toolkit":{"installer": ["echo installing_cuda_toolkit"], "min_trust": 2, "needs_network": False},
-    "k8s_cli":    {"installer": ["echo installing_kubectl"], "min_trust": 1, "needs_network": False},
-}
+from security.network_policies import is_allowed, POLICY_DB
+from security.filesystem_policies import is_path_allowed, cleanup_ttl, FS_DB
+from adapters.mappings import WINGET, BREW, APT, CLI_TEMPLATES
 
-policy = AskAndProceedPolicy(REGISTRY)
-prov = ProvenanceStore()
-capman = CapabilityManager(policy, prov)
-broker = StreamBroker()  # ישות משותפת ל-HTTP ול-WS
+APP = FastAPI(title="IMU Adapter API")
 
+# ---------- Models ----------
 
-def _json(self: BaseHTTPRequestHandler, code: int, obj):
-    payload = json.dumps(obj, ensure_ascii=False).encode()
-    self.send_response(code)
-    self.send_header("Content-Type", "application/json; charset=utf-8")
-    self.send_header("Content-Length", str(len(payload)))
-    self.end_headers()
-    self.wfile.write(payload)
+class Evidence(BaseModel):
+    kind: str
+    content_sha256: str
+    source: str
+    trust: float = Field(ge=0.0, le=1.0)
 
+class RunResult(BaseModel):
+    ok: bool
+    cmd: str
+    reason: Optional[str] = None
+    evidence: List[Evidence] = []
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/capabilities/status":
-            return _json(self, 200, {"status": capman.status})
-        return _json(self, 404, {"error": "not_found"})
+# ---------- Utils ----------
 
-    def do_POST(self):
-        if self.path == "/capabilities/request":
-            ln = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(ln).decode() if ln > 0 else "{}"
-            try:
-                req = json.loads(body or "{}")
-                name = req["name"]
-                dry_run = bool(req.get("dry_run", True))
-                user = UserSubspace(
-                    user_id=req.get("user_id", "anon"),
-                    trust_level=int(req.get("trust_level", 1)),
-                    ttl_seconds=int(req.get("ttl", 3600)),
-                    allow_exec=bool(req.get("allow_exec", False)),
-                    allow_network=bool(req.get("allow_network", False)),
-                    strict_provenance=bool(req.get("strict_provenance", True)),
-                )
-                ctx = RequestContext(user=user, reason=f"request_capability:{name}")
-                res = capman.request(name, ctx, dry_run=dry_run)
-                # דחיפת אירוע התקדמות ל-WS timeline
-                broker.publish("timeline", {
-                    "kind": "capability_request",
-                    "capability": name,
-                    "user": user.user_id,
-                    "dry_run": dry_run,
-                    "result": res,
-                })
-                return _json(self, 200, res)
-            except Exception as e:
-                broker.publish("timeline", {"kind": "error", "where": "capabilities/request", "msg": str(e)})
-                return _json(self, 400, {"error": str(e)})
-        
-        if self.path == "/adapters/dry_run":
-            ln = int(self.headers.get("Content-Length","0"))
-            req = json.loads(self.rfile.read(ln) or b"{}")
-            from engine.adapters_runner import AdaptersService
-            user = UserSubspace(
-                user_id=req.get("user_id","anon"),
-                trust_level=int(req.get("trust_level",1)),
-                ttl_seconds=int(req.get("ttl",3600)),
-                allow_exec=False,  # dry-run בלבד
-                allow_network=False,
-                strict_provenance=True,
-            )
-            ctx = RequestContext(user=user, reason=f"adapter_dry_run:{req.get('adapter')}")
-            svc = AdaptersService(policy, broker)
-            plan = svc.dry_run(req["adapter"], req.get("spec",{}), ctx)
-            return _json(self, 200, {"ok": True, "plan": {"commands": plan.commands, "env": plan.env, "notes": plan.notes}})
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
 
-        return _json(self, 404, {"error": "not_found"})
+def _os_family() -> str:
+    sysname = platform.system().lower()
+    if "windows" in sysname: return "win"
+    if "darwin" in sysname: return "mac"
+    return "linux"
 
+# ---------- Endpoints ----------
 
-def serve_http(host="0.0.0.0", port=8081):
-    httpd = HTTPServer((host, port), Handler)
-    print(f"[HTTP] listening on http://{host}:{port}")
-    httpd.serve_forever()
+@APP.get("/api/policy/network/{user_id}")
+async def get_net_policy(user_id: str):
+    p = POLICY_DB.get(user_id)
+    if not p: raise HTTPException(404, "no policy")
+    return JSONResponse(content={
+        "default_deny": p.default_deny,
+        "rules": [r.__dict__ for r in p.rules],
+        "max_outbound_qps": p.max_outbound_qps,
+        "max_concurrent": p.max_concurrent,
+    })
 
-
-def app(env, start):
-    path = env.get('PATH_INFO','/')
-    method = env.get('REQUEST_METHOD','GET')
-
-    # SSE
-    if path == "/events":
-        qs = parse_qs(env.get('QUERY_STRING',''))
-        topic = qs.get('topic', ['timeline'])[0]
-        # כל מנוי מקבל תור עם drop-policy בטוח (החלפת נמוכים)
-        sub: _Sub = broker.subscribe(topic, drop_policy=DropPolicy.LOWEST_PRIORITY_REPLACE)
-        start("200 OK", [('Content-Type','text/event-stream'),
-                         ('Cache-Control','no-cache'),
-                         ('Connection','keep-alive')])
-        return broker.sse_iter(sub)
-
-    # פרסום אירוע
-    if path == "/publish" and method == "POST":
-        size = int(env.get('CONTENT_LENGTH','0') or 0)
-        raw = env['wsgi.input'].read(size) if size>0 else b"{}"
-        try:
-            data = json.loads(raw.decode('utf-8') or "{}")
-            topic = data.get("topic","timeline")
-            prio = data.get("priority","telemetry")
-            ev = data.get("event",{})
-            ok = broker.publish(topic, ev, priority=prio)
-            return _json(start, 200, {"ok": ok})
-        except Exception as e:
-            return _json(start, 400, {"ok": False, "error": str(e)})
-
-    # סטטוס/מדדים
-    if path == "/stats":
-        return _json(start, 200, broker.stats())
-
-    # עדכון קונפיג נושא (rps/burst/max_queue/weight/policy)
-    if path == "/topic/config" and method == "POST":
-        size = int(env.get('CONTENT_LENGTH','0') or 0)
-        raw = env['wsgi.input'].read(size) if size>0 else b"{}"
-        data = json.loads(raw.decode('utf-8') or "{}")
-        topic = data["topic"]
-        cfg = {}
-        for k in ("rps","burst","max_queue","weight"):
-            if k in data: cfg[k] = type(broker._topics[topic]["bucket"].rps if k=="rps" else
-                                        broker._topics[topic]["bucket"].burst if k=="burst" else
-                                        broker._topics[topic]["max_queue"] if k=="max_queue" else
-                                        broker._topics[topic]["weight"])(data[k])
-        policy = data.get("drop_policy")
-        if policy: cfg["drop_policy"] = policy
-        broker.configure_topic(topic, **cfg)
-        return _json(start, 200, {"ok": True, "topic": topic})
-
-    # סטטיק
-    fpath = os.path.normpath(os.path.join(STATIC_DIR, path.lstrip("/")))
-    if path == "/" or not os.path.isfile(fpath):
-        fpath = os.path.join(STATIC_DIR, "index.html")
-    try:
-        ctype, _ = mimetypes.guess_type(fpath); ctype = ctype or "text/plain"
-        with open(fpath,'rb') as fh:
-            buff = fh.read()
-        start("200 OK", [('Content-Type', f"{ctype}; charset=utf-8"),
-                         ('Cache-Control','no-store')])
-        return [buff]
-    except FileNotFoundError:
-        start("404 NOT FOUND", [('Content-Type','text/plain')])
-        return [b'not found']
-
-
-
-app = FastAPI()
-
-class PolicyIn(BaseModel):
+class CapabilityRequest(BaseModel):
     user_id: str
-    trust: str = "medium"
-    ttl_seconds: int = Limits().ttl_seconds
-    p95_ms_max: int = Limits().p95_ms_max
-    net_allow: List[str] = []     # host regex allowed (simple form)
-    fs_allow: List[str] = []      # regex paths
+    capability: str   # e.g., "unity.hub", "jdk", "gradle", "kubectl", "cuda"
 
-@app.post("/policy/put")
-def policy_put(p: PolicyIn):
-    u = policy_store.get(p.user_id)
-    u.trust = p.trust
-    u.limits.p95_ms_max = p.p95_ms_max
-    u.limits.ttl_seconds = p.ttl_seconds
-    u.net_rules = [NetRule(allow=True, host_regex=rgx) for rgx in p.net_allow]
-    u.fs_rules = [FsRule(allow=True, path_regex=rgx) for rgx in p.fs_allow]
-    policy_store.put(u)
-    return {"ok":True}
+@APP.post("/capabilities/request")
+async def request_capability(req: CapabilityRequest):
+    fam = _os_family()
+    if fam == "win":
+        mp = WINGET.get(req.capability)
+    elif fam == "mac":
+        mp = BREW.get(req.capability)
+    else:
+        mp = APT.get(req.capability)
 
-@app.post("/provenance/keygen/{name}")
-def keygen(name:str):
-    return gen_keypair(name)
+    if not mp:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "unknown_capability", "capability": req.capability
+        })
 
-class EvidenceIn(BaseModel):
-    path: str
-    kind: str = "file"
-    trust: str = "high"
-    signer: Optional[str] = "default"
+    # לא מתקינים אוטומטית כאן (רשאות/מדיניות); מחזירים פקודה מדויקת.
+    if fam == "win":
+        cmd = f"winget install -e --id {mp}"
+    elif fam == "mac":
+        # brew cask אם צריך (במיפויים עצמם כבר מוגדר מה מותקן דרך cask)
+        cmd = f"brew install {mp}"
+    else:
+        cmd = f"sudo apt-get update && sudo apt-get install -y {mp}"
 
-@app.post("/provenance/ingest")
-def prov_ingest(ev: EvidenceIn):
-    h = cas_put_file(ev.path)
-    e = Evidence(hash=h, kind=ev.kind, trust=ev.trust)
-    e.sign(ev.signer or "default")
-    return {"hash":h,"evidence":e.__dict__}
+    ev = Evidence(kind="install_command",
+                  content_sha256=sha256_bytes(cmd.encode()),
+                  source=f"mapping:{fam}",
+                  trust=0.7)
+    return {"ok": True, "command": cmd, "evidence": [ev.dict()]}
 
-class CapReq(BaseModel):
-    capability: str
-    args: dict = {}
+class DryRunRequest(BaseModel):
+    user_id: str
+    kind: str          # "unity.build" | "android.gradle" | "ios.xcode" | "k8s.kubectl.apply" | "cuda.nvcc"
+    params: Dict[str, Any]
 
-@app.post("/capabilities/request")
-def cap_request(req: CapReq):
-    # “ask-and-continue”: try to install or fail loudly with actionable error
-    cap = req.capability.lower()
+@APP.post("/adapters/dry_run", response_model=RunResult)
+async def adapters_dry_run(req: DryRunRequest):
+    fam = _os_family()
+    tmpl_map = CLI_TEMPLATES.get(req.kind)
+    if not tmpl_map:
+        raise HTTPException(400, "unknown kind")
+    tmpl = tmpl_map.get(fam) or tmpl_map.get("any")
+    if not tmpl:
+        raise HTTPException(400, "unsupported on this OS")
+
+    # הרכבת הפקודה דטרמיניסטית
     try:
-        if cap=="android-dry-run":
-            ok, why = android.dry_run(req.args.get("project_dir","."))
-            return {"ok":ok,"why":why}
-        if cap=="ios-dry-run":
-            ok, why = ios.dry_run(req.args.get("xcodeproj_path","app.xcodeproj"))
-            return {"ok":ok,"why":why}
-        if cap=="unity-dry-run":
-            ok, why = unity.dry_run(req.args.get("project_path","."))
-            return {"ok":ok,"why":why}
-        if cap=="cuda-dry-run":
-            ok, why = cuda.dry_run()
-            return {"ok":ok,"why":why}
-        if cap=="k8s-dry-run":
-            return {"ok":k8s.dry_run()}
-        raise HTTPException(status_code=400, detail="unknown capability")
-    except PolicyViolation as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        cmd = tmpl.format(**req.params)
+    except KeyError as e:
+        return RunResult(ok=False, cmd="", reason=f"missing_param:{e.args[0]}", evidence=[])
 
+    # חסימת טוקנים מסוכנים באופן קשיח
+    forbidden_tokens = [" rm -rf ", " :(){", "mkfs", " dd if=", ";rm -rf", "&& rm -rf"]
+    if any(t in f" {cmd} " for t in forbidden_tokens):
+        return RunResult(ok=False, cmd=cmd, reason="blocked_by_policy", evidence=[])
 
-if __name__ == "__main__":
-    serve_http()
+    # Gating בסיסי לפי FS policy על פרמטרים ידועים
+    path_keys_read  = ["project", "workspace", "manifest", "src", "log"]
+    path_keys_write = ["out", "keystore"]
+    for k in path_keys_read:
+        if k in req.params:
+            p = str(req.params[k])
+            if not is_path_allowed(req.user_id, p, write=False):
+                return RunResult(ok=False, cmd=cmd, reason=f"fs_denied_read:{k}", evidence=[])
+    for k in path_keys_write:
+        if k in req.params:
+            p = str(req.params[k])
+            if not is_path_allowed(req.user_id, p, write=True):
+                return RunResult(ok=False, cmd=cmd, reason=f"fs_denied_write:{k}", evidence=[])
+
+    ev = Evidence(kind="cli-template",
+                  content_sha256=sha256_bytes(cmd.encode()),
+                  source=f"template:{req.kind}",
+                  trust=0.9)
+    return RunResult(ok=True, cmd=cmd, evidence=[ev])
+
+class RunAdapterRequest(BaseModel):
+    user_id: str
+    kind: str
+    params: Dict[str, Any]
+    execute: bool = False  # True => להריץ בפועל
+
+@APP.post("/adapters/run", response_model=RunResult)
+async def adapters_run(req: RunAdapterRequest):
+    # ראשית dry-run לאותה פקודה, להבטיח דטרמיניזם וגייטינג
+    dry = await adapters_dry_run(DryRunRequest(user_id=req.user_id, kind=req.kind, params=req.params))
+    if not dry.ok:
+        return dry
+
+    if not req.execute:
+        return dry  # מחזירים את ההרכבה + evidence, בלי להריץ
+
+    # בדיקת binary קיים
+    bin_name = dry.cmd.split()[0]
+    if not shutil.which(bin_name):
+        # מציעים פקודת התקנה מדויקת לפי ה־capability הראשי
+        cap = req.kind.split('.', 1)[0]
+        cmd_req = await request_capability(CapabilityRequest(user_id=req.user_id, capability=cap))
+        evs = [Evidence(**e) for e in cmd_req["evidence"]] if isinstance(cmd_req, dict) and "evidence" in cmd_req else []
+        return RunResult(ok=False, cmd=dry.cmd, reason="resource_required", evidence=evs)
+
+    # ריצה אמיתית (ללא מוקים) + איסוף evidence של הפלט
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            dry.cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+        out, _ = await proc.communicate()
+        ok = (proc.returncode == 0)
+        ev = Evidence(kind="process_output",
+                      content_sha256=sha256_bytes(out or b""),
+                      source="local_run",
+                      trust=0.8)
+        return RunResult(ok=ok, cmd=dry.cmd, reason=None if ok else f"exit_{proc.returncode}", evidence=[ev])
+    except Exception as e:
+        raise HTTPException(500, f"exec_failed: {e}")
