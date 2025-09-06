@@ -29,7 +29,13 @@ from server.archive_api import router as archive_router
 from server.bundles_api import router as bundles_router
 from server.unified_archive_api import router as unified_router
 from server.replay_api import router as replay_router
+from server.gitops_api import router as gitops_router
+from server.audit_ops import AuditMiddleware
+from server.gitops_guard_api import router as guard_router
 
+APP.include_router(guard_router)
+APP.add_middleware(AuditMiddleware)
+APP.include_router(gitops_router)
 APP.include_router(replay_router)
 APP.include_router(unified_router)
 APP.include_router(bundles_router)
