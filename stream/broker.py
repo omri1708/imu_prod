@@ -1,10 +1,10 @@
 # stream/broker.py
 # -*- coding: utf-8 -*-
 import time, threading, heapq
-from typing import Dict, List, Tuple, Optional, Iterable, Any
+from typing import Dict, List, Tuple, Optional, Iterable, Any, Deque
 from policy.user_policy import POLICIES
 import asyncio, time, heapq
-
+from collections import deque, defaultdict
 
 
 class _Event:
@@ -126,3 +126,60 @@ class Broker:
 
 
 BROKER = Broker()
+
+#------
+class StreamBroker:
+    def __init__(self, max_global_qps: float, max_global_burst: int):
+        self.topics: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
+        self.lock = threading.Lock()
+        self.last_emit_ts = 0.0
+        self.tokens = max_global_burst
+        self.rps = max_global_qps
+        self.max_burst = max_global_burst
+        self.topic_qps: Dict[str, float] = {}
+        self.topic_burst: Dict[str, int] = {}
+        self.topic_tokens: Dict[str, float] = defaultdict(lambda: 0.0)
+        self.priorities: Dict[str, int] = {}  # נמוך=0, גבוה=10
+
+    @staticmethod
+    def now_ms() -> int:
+        return int(time.time()*1000)
+
+    def ensure_topic(self, topic: str, qps: float, burst: int, priority: int = 5):
+        with self.lock:
+            self.topic_qps[topic] = qps
+            self.topic_burst[topic] = burst
+            self.priorities[topic] = priority
+            self.topic_tokens[topic] = burst
+
+    def _refill(self, dt: float):
+        self.tokens = min(self.max_burst, self.tokens + self.rps*dt)
+        for t in list(self.topic_tokens.keys()):
+            cap = self.topic_burst.get(t, self.max_burst)
+            self.topic_tokens[t] = min(cap, self.topic_tokens[t] + self.topic_qps.get(t, self.rps)*dt)
+
+    def publish(self, topic: str, event: Dict[str, Any]):
+        now = time.time()
+        with self.lock:
+            dt = max(0.0, now - self.last_emit_ts)
+            self._refill(dt)
+            self.last_emit_ts = now
+            if self.topic_tokens.get(topic, 0.0) < 1.0 or self.tokens < 1.0:
+                # דריסה שקטה/דחייה לפי מדיניות; כאן נשמור ונשדר כשיהיו טוקנים
+                self.topics[topic].append(event)
+                return False
+            # צריכת טוקנים
+            self.topic_tokens[topic] -= 1.0
+            self.tokens -= 1.0
+            self.topics[topic].append(event)
+            return True
+
+    def poll(self, topic: str, max_items: int = 100) -> List[Dict[str, Any]]:
+        with self.lock:
+            out = []
+            dq = self.topics.get(topic)
+            if not dq:
+                return out
+            while dq and len(out) < max_items:
+                out.append(dq.popleft())
+            return out

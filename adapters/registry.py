@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import subprocess, os, time, json, pathlib
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
+import platform, shutil, subprocess, os
+
+from ..policy.user_policy import UserPolicy
+from ..policy.policy_enforcer import PolicyEnforcer, PolicyViolation
 
 class ResourceRequired(Exception):
     def __init__(self, requirements:Dict[str,str]):
@@ -59,3 +63,76 @@ class AdapterRegistry:
         return {"deployed": True, "kubectl_stdout": res.stdout[-800:]}
 
 ADAPTERS = AdapterRegistry()
+
+# מיפוי קונקרטי (דוגמאות נפוצות, ניתן להרחיב):
+WINGET_IDS = {
+    "android-sdk": "Google.AndroidStudio",   # מתקין IDE + sdkmanager (לשינוי אם רוצים רק sdk)
+    "unity-hub": "UnityTechnologies.UnityHub",
+    "nodejs": "OpenJS.NodeJS",
+    "go": "GoLang.Go",
+    "cuda": "Nvidia.CUDA",
+    "kubernetes-cli": "Kubernetes.kubectl"
+}
+BREW_FORMULAE = {
+    "android-sdk": "android-commandlinetools",
+    "unity-hub":  "unity-hub",
+    "nodejs":     "node",
+    "go":         "go",
+    "cuda":       "cuda",
+    "kubernetes-cli": "kubectl"
+}
+
+def _os_family():
+    sys = platform.system().lower()
+    if "windows" in sys:
+        return "windows"
+    if "darwin" in sys:
+        return "mac"
+    return "linux"
+
+def _tool_exists(bin_name: str) -> bool:
+    return shutil.which(bin_name) is not None
+
+def _cmd_exists(cmd: List[str]) -> bool:
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        return True
+    except Exception:
+        return False
+
+def dry_run_install(capability: str) -> Dict[str, Any]:
+    osfam = _os_family()
+    if osfam == "windows":
+        pkg = WINGET_IDS.get(capability)
+        if not pkg:
+            return {"ok": False, "reason":"unknown_capability"}
+        return {"ok": True, "cmd":["winget","install","-e","--id",pkg]}
+    elif osfam == "mac":
+        pkg = BREW_FORMULAE.get(capability)
+        if not pkg:
+            return {"ok": False, "reason":"unknown_capability"}
+        return {"ok": True, "cmd":["brew","install",pkg]}
+    else:
+        # Linux – דוגמאות נפוצות
+        apt = shutil.which("apt")
+        if apt and capability=="nodejs":
+            return {"ok": True, "cmd":["bash","-lc","curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs"]}
+        if apt and capability=="go":
+            return {"ok": True, "cmd":["bash","-lc","sudo apt-get update && sudo apt-get install -y golang"]}
+        if capability=="kubernetes-cli":
+            return {"ok": True, "cmd":["bash","-lc","curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl && chmod +x kubectl && sudo mv kubectl /usr/local/bin/"]}
+
+        return {"ok": False, "reason":"unsupported_linux_distro"}
+
+def request_capability_install(capability: str, platform_hint: Optional[str]=None) -> Dict[str, Any]:
+    """
+    מרכיב פקודת התקנה *בלי להריץ*, כדי שתוכל לאשר/להריץ תחת CI/Agent שלך.
+    """
+    dr = dry_run_install(capability)
+    return dr
+
+def check_policy_for_adapter(policy: UserPolicy, enforcer: PolicyEnforcer, adapter_name: str, required_hosts: Optional[List[str]]=None):
+    if not policy.can_use_capability(adapter_name):
+        raise PolicyViolation(f"Adapter '{adapter_name}' disabled by policy.")
+    for h in (required_hosts or []):
+        enforcer.enforce_network_host(policy, h)

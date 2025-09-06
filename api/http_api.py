@@ -9,22 +9,23 @@ from synth.rollout import gated_rollout
 from stream.broker import BROKER
 from engine.events import emit_progress, emit_timeline
 from common.exc import ResourceRequired
-import asyncio, json
-from typing import Dict, Any
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Query
 from fastapi.responses import JSONResponse
 from stream.broker import Broker
 from engine.enforcer import enforce_claims, GroundingError
 from adapters.unity_cli import run_unity_build, ActionRequired as UnityReq
 from adapters.k8s_uploader import upload_dir_with_tar, deploy_k8s_job, ActionRequired as K8sReq
-from __future__ import annotations
-from typing import Dict, Any
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
+
 from broker.stream_bus import bus
 from engine.adapter_runner import enforce_policy, ResourceRequired
 from adapters import android, ios, unity, cuda, k8s
 from adapters.contracts import AdapterResult
+from ..policy.user_policy import UserPolicy
+from ..policy.policy_enforcer import PolicyEnforcer, PolicyViolation
+from ..provenance.castore import ContentAddressableStore
+from ..engine.synthesis_pipeline import SynthesisPipeline
+from ..stream.broker import StreamBroker
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
@@ -196,7 +197,7 @@ def _parse_body(self: BaseHTTPRequestHandler) -> Dict[str, Any]:
     except Exception:
         return {}
 
-class Handler(BaseHTTPRequestHandler):
+class _Handler(BaseHTTPRequestHandler):
     server_version = "IMU-HTTP/1.0"
 
     def do_GET(self):
@@ -271,6 +272,74 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, 500, {"ok": False, "error": str(e)})
 
         _bad(self, "not_found", 404)
+
+#------
+GLOBAL_BROKER = StreamBroker(max_global_qps=200.0, max_global_burst=60)
+
+class IMUHandler(BaseHTTPRequestHandler):
+    def _send(self, code: int, payload: Dict[str, Any]):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length","0"))
+        raw = self.rfile.read(length)
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return self._send(400, {"error":"bad_json"})
+
+        if self.path == "/capabilities/request":
+            # מנסה להתקין/לאפשר יכולת נדרשת, מחזיר outcome מיידי
+            from ..adapters.registry import request_capability_install
+            out = request_capability_install(req.get("capability"), req.get("platform"))
+            return self._send(200, out)
+
+        if self.path == "/respond":
+            # אכיפת policy + סינתזה + Grounding + הזרמת timeline ל־Broker
+            user = req.get("user", "anonymous")
+            policy_spec = req.get("policy", {})
+            policy = UserPolicy(
+                user_id=user,
+                trust=policy_spec.get("trust","medium"),
+                strict_grounding=policy_spec.get("strict_grounding", True),
+                require_signed_evidence=policy_spec.get("require_signed_evidence", True),
+            )
+            # stream topic per user
+            topic = f"timeline::{user}"
+            GLOBAL_BROKER.ensure_topic(topic, qps=policy.rate.max_requests_per_min/60.0, burst=policy.rate.burst)
+
+            # שדר תחילת עבודה
+            GLOBAL_BROKER.publish(topic, {"evt":"start","ts_ms":StreamBroker.now_ms(),"phase":"plan"})
+
+            pipe = SynthesisPipeline(cas_dir=req.get("cas_dir","./.imu_cas"))
+            try:
+                result = pipe.run(policy,
+                                  plan=req.get("plan",{}),
+                                  generated=req.get("generated",{}),
+                                  tests_result=req.get("tests",{}),
+                                  verification=req.get("verification",{}))
+            except PolicyViolation as e:
+                GLOBAL_BROKER.publish(topic, {"evt":"policy_violation","ts_ms":StreamBroker.now_ms(),"detail":str(e)})
+                return self._send(403, {"ok":False,"error":"policy_violation","detail":str(e)})
+            except Exception as e:
+                GLOBAL_BROKER.publish(topic, {"evt":"error","ts_ms":StreamBroker.now_ms(),"detail":str(e)})
+                return self._send(500, {"ok":False,"error":"internal","detail":str(e)})
+
+            GLOBAL_BROKER.publish(topic, {"evt":"finish","ts_ms":StreamBroker.now_ms(),"phase":"respond"})
+            return self._send(200, result)
+
+        return self._send(404, {"error":"not_found"})
+
+def serve_http(port: int = 8080):
+    httpd = HTTPServer(("0.0.0.0", port), IMUHandler)
+    th = threading.Thread(target=httpd.serve_forever, daemon=True)
+    th.start()
+    return httpd
 
 
 if __name__ == "__main__":
