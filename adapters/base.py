@@ -8,9 +8,26 @@ from audit.log import AppendOnlyAudit
 
 from storage import cas
 from common.exc import ResourceRequired
+from dataclasses import dataclass
+from typing import List, Dict, Any
+from engine.policy import RequestContext, AskAndProceedPolicy, PolicyError
+
 
 AUDIT = AppendOnlyAudit("var/audit/adapters.jsonl")
 
+
+@dataclass
+class PlanResult:
+    commands: List[str]
+    env: Dict[str, str]
+    notes: str
+
+class AdapterBase:
+    name = "base"
+    def __init__(self, policy: AskAndProceedPolicy): self.policy = policy
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult: raise NotImplementedError
+    def validate(self, plan: PlanResult, ctx: RequestContext):
+        self.policy.validate_adapter_exec(ctx, self.name, plan.commands)
 
 def _which(x: str) -> str:
     p = shutil.which(x)

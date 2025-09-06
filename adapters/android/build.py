@@ -1,12 +1,31 @@
 # adapters/android/build.py
 # -*- coding: utf-8 -*-
-import os, shutil, tempfile
-from ..contracts import ensure_tool, run, record_provenance
-
 import os, subprocess, shlex
+from typing import Dict, Any
+
+from ..contracts import ensure_tool, run, record_provenance
 from contracts.adapters import android_env
 from engine.errors import ResourceRequired
+from provenance.audit import AuditLog
 
+
+def run_android_build(cfg: Dict[str,Any], audit: AuditLog):
+    proj = cfg["project_dir"]
+    variant = cfg["variant"]
+    task = cfg.get("gradle_task","assemble")
+    gradlew = os.path.join(proj, "gradlew")
+    if not os.path.exists(gradlew):
+        raise RuntimeError("gradlew_not_found")
+    cmd = f'{shlex.quote(gradlew)} {task}{variant.capitalize()}'
+    env = dict(os.environ)
+    if cfg.get("keystore"):
+        env["IMU_KEYSTORE"] = cfg["keystore"]
+        env["IMU_KEYALIAS"] = cfg.get("keystore_alias","")
+        env["IMU_KEYPASS"] = cfg.get("keystore_pass","")
+    audit.append("adapter.android","invoke",{"cmd":cmd,"proj":proj})
+    subprocess.check_call(cmd, cwd=proj, shell=True, env=env)
+    audit.append("adapter.android","success",{"variant":variant})
+    return {"ok": True, "artifact_hint": os.path.join(proj, "app","build","outputs")}
 
 def build_apk(project_dir: str, variant: str = "Release") -> str:
     android_env()

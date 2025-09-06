@@ -1,18 +1,27 @@
 # http/api.py
+import  os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json, threading
 from typing import Dict, Any
+
 from engine.pipeline_bindings import run_adapter
 from broker.streams import Broker
 from contracts.base import ResourceRequired
-import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Dict, Any
+
 from policy.policy_engine import PolicyStore, UserPolicy
 from perf.measure import PerfRegistry
 from provenance.store import CAStore
 from engine.enforcement import Enforcement, EvidenceError
 from engine.synthesis_pipeline import SynthesisPipeline
+
+from provenance.store import CAS
+from provenance.audit import AuditLog
+from adapters.android.build import run_android_build
+from adapters.ios.build import run_ios_build
+from adapters.unity.cli import run_unity_cli
+from adapters.k8s.deploy import run_k8s_deploy
+from adapters.cuda.runner import run_cuda_job
+from engine.adapter_router import new_broker
 
 
 BROKER = Broker.singleton()
@@ -20,6 +29,68 @@ POLICIES = PolicyStore()
 PERF = PerfRegistry()
 CASTORE = CAStore(root="./ca_store", secret_key=b"dev-secret")
 ENFORCE = Enforcement(POLICIES, CASTORE, PERF)
+ADAPTERS = {
+    "android_build": run_android_build,
+    "ios_build": run_ios_build,
+    "unity_cli": run_unity_cli,
+    "k8s_deploy": run_k8s_deploy,
+    "cuda_job": run_cuda_job,
+}
+
+class State:
+    cas: CAS = None
+    audit: AuditLog = None
+    broker = None
+
+
+def setup_state(root: str, secret: bytes, user_id: str="user"):
+    State.cas = CAS(os.path.join(root, "cas"), secret)
+    State.audit = AuditLog(os.path.join(root, "audit","log.jsonl"), secret)
+    State.broker = new_broker(user_id, State.cas, State.audit)
+
+class Handler(BaseHTTPRequestHandler):
+    def _json(self, code: int, payload: Dict[str,Any]):
+        b = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type","application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_POST(self):
+        if self.path != "/run_adapter":
+            self._json(404, {"error":"not_found"})
+            return
+        raw = self.rfile.read(int(self.headers.get("Content-Length","0") or "0"))
+        try:
+            req = json.loads(raw or b"{}")
+        except Exception:
+            self._json(400, {"error":"bad_json"})
+            return
+        name = req.get("name")
+        cfg = req.get("config") or {}
+        if name not in ADAPTERS:
+            self._json(400, {"error":"unknown_adapter"})
+            return
+        # signal start → UI
+        State.broker.submit("timeline", {"message": f"start {name}"})
+        try:
+            res = ADAPTERS[name](cfg, State.audit)
+            # success event
+            State.broker.submit("progress", {"progress": 100, "name": name})
+            State.broker.submit("timeline", {"message": f"done {name}"})
+            self._json(200, {"ok": True, "result": res})
+        except Exception as e:
+            State.audit.append("http","adapter_error",{"name":name,"err":str(e)})
+            State.broker.submit("timeline", {"message": f"error {name}: {e}"})
+            self._json(500, {"ok": False, "error": str(e)})
+
+
+def run_http(root: str, secret: bytes, host="127.0.0.1", port=8787):
+    setup_state(root, secret)
+    httpd = HTTPServer((host, port), Handler)
+    print(f"IMU HTTP listening at http://{host}:{port}")
+    httpd.serve_forever()
 
 
 def demo_steps():
@@ -41,33 +112,11 @@ def demo_steps():
         return {"evidence_bytes": ev}
     return {"plan":plan,"generate":generate,"test":test,"verify":verify,"package":package}
 
-class Handler(BaseHTTPRequestHandler):
-    def _send(self, code:int, payload:Dict[str,Any]):
-        body = json.dumps(payload, ensure_ascii=False).encode()
-        self.send_response(code)
-        self.send_header("Content-Type","application/json; charset=utf-8")
-        self.send_header("Content-Length",str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        if self.path == "/run_pipeline":
-            sz = int(self.headers.get("Content-Length","0") or "0")
-            _ = self.rfile.read(sz)  # אפשר לעבד spec אמיתי מהלקוח
-            pipe = SynthesisPipeline(PERF, ENFORCE, CASTORE)
-            try:
-                res = pipe.run(user_id="demo", steps=demo_steps())
-                self._send(200, {"ok":True, "result":res, "perf":PERF.summary()})
-            except (EvidenceError,) as ee:
-                self._send(400, {"ok":False, "error":"evidence_error", "detail":str(ee)})
-            except Exception as e:
-                self._send(500, {"ok":False, "error":"server_error", "detail":str(e)})
-        else:
-            self._send(404, {"ok":False, "error":"not_found"})
 
 def serve(host="127.0.0.1", port=8081):
     httpd = HTTPServer((host, port), Handler)
     httpd.serve_forever()
+
 
 if __name__ == "__main__":
     serve()

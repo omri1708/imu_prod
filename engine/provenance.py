@@ -2,6 +2,9 @@
 from __future__ import annotations
 import time, hmac, hashlib
 from typing import Any, Dict, Optional, Tuple
+import hashlib, json, time, os
+from dataclasses import dataclass
+
 
 class ProvenanceError(Exception): ...
 class SignatureError(Exception): ...
@@ -12,6 +15,36 @@ L0_INLINE = 0
 L1_HTTP_META = 1
 L2_SIGNED = 2
 L3_SIGNED_FRESH = 3
+
+@dataclass
+class Evidence:
+    kind: str        # "installer_log" | "artifact" | "command_plan" | "signature"
+    content: bytes
+    meta: Dict[str, Any]
+
+class ProvenanceStore:
+    def __init__(self, root="var/prov"):
+        self.root = root
+        os.makedirs(self.root, exist_ok=True)
+
+    def put(self, ev: Evidence) -> str:
+        h = hashlib.sha256(ev.content).hexdigest()
+        path = os.path.join(self.root, h[:2], h[2:4])
+        os.makedirs(path, exist_ok=True)
+        fn = os.path.join(path, f"{h}.json")
+        doc = {
+            "hash": h,
+            "kind": ev.kind,
+            "meta": ev.meta,
+            "ts": time.time(),
+        }
+        with open(fn, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        # נשמור גם את ה-payload כקובץ
+        with open(os.path.join(path, f"{h}.bin"), "wb") as f:
+            f.write(ev.content)
+        return h
+
 
 def _hmac_ok(message: bytes, hex_sig: str, secret: bytes, algo: str="sha256") -> bool:
     try:
@@ -25,6 +58,7 @@ def _hmac_ok(message: bytes, hex_sig: str, secret: bytes, algo: str="sha256") ->
         calc = mac.digest().hex()
     # השוואה חסינת timing
     return hmac.compare_digest(calc.lower(), (hex_sig or "").lower())
+
 
 def verify_signature(e: Dict[str,Any], policy: Dict[str,Any]) -> bool:
     """
@@ -65,6 +99,7 @@ def verify_signature(e: Dict[str,Any], policy: Dict[str,Any]) -> bool:
     message = b"\x1f".join(parts)
     return _hmac_ok(message, sig, secret, algo)
 
+
 def evidence_provenance_level(e: Dict[str,Any], policy: Dict[str,Any], *, now_ts: Optional[float]=None) -> int:
     """
     מדרג רמת מקור:
@@ -97,6 +132,7 @@ def evidence_provenance_level(e: Dict[str,Any], policy: Dict[str,Any], *, now_ts
     else:
         lvl = L0_INLINE
     return int(lvl)
+
 
 def enforce_min_provenance(claim: Dict[str,Any], policy: Dict[str,Any], *, now_ts: Optional[float]=None) -> None:
     """

@@ -1,9 +1,28 @@
 # adapters/ios/build.py
 # -*- coding: utf-8 -*-
 import os
+from typing import Dict, Any
+import subprocess, shlex
+
 from ..contracts import ensure_tool, run, record_provenance
-import subprocess, shlex, os
 from contracts.adapters import ios_env
+from provenance.audit import AuditLog
+
+def run_ios_build(cfg: Dict[str,Any], audit: AuditLog):
+    ws = cfg["workspace"]
+    scheme = cfg["scheme"]
+    archive = cfg["archive_path"]
+    export_path = cfg["export_path"]
+    export_plist = cfg.get("export_options_plist")
+    cmd1 = f'xcodebuild -workspace {shlex.quote(ws)} -scheme {shlex.quote(scheme)} -configuration Release -archivePath {shlex.quote(archive)} archive -allowProvisioningUpdates'
+    cmd2 = f'xcodebuild -exportArchive -archivePath {shlex.quote(archive)} -exportPath {shlex.quote(export_path)}'
+    if export_plist:
+        cmd2 += f' -exportOptionsPlist {shlex.quote(export_plist)}'
+    audit.append("adapter.ios","invoke",{"archive_cmd":cmd1,"export_cmd":cmd2})
+    subprocess.check_call(cmd1, shell=True)
+    subprocess.check_call(cmd2, shell=True)
+    audit.append("adapter.ios","success",{"ipa_dir":export_path})
+    return {"ok": True, "artifact_hint": export_path}
 
 
 def build_xcarchive(project: str, scheme: str, out_dir: str) -> str:

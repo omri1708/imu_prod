@@ -11,6 +11,9 @@ from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
 from .contracts import AdapterResult, require
 
+from adapters.base import AdapterBase, PlanResult
+from engine.policy import RequestContext
+
 
 def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> AdapterResult:
     if not shutil.which("xcodebuild"):
@@ -36,8 +39,15 @@ def build_ios_xcodeproj(project_path:str, scheme:str, sdk:str="iphoneos") -> Ada
     except Exception as e:
         return AdapterResult(False, str(e), {})
 
-class IOSAdapter(BuildAdapter):
+class IOSAdapter(AdapterBase, BuildAdapter):
     KIND = "ios"
+    name = "ios"
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
+        scheme = spec.get("scheme","App")
+        cfg = spec.get("configuration","Debug")
+        sdk = spec.get("sdk","iphonesimulator")
+        cmds = [f"xcodebuild -scheme {scheme} -configuration {cfg} -sdk {sdk} build"]
+        return PlanResult(commands=cmds, env={}, notes="xcodebuild build")
 
     def detect(self) -> bool:
         return bool(shutil.which("xcodebuild"))

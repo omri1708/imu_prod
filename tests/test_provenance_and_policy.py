@@ -1,8 +1,41 @@
 # imu_repo/tests/test_provenance_and_policy.py
 from __future__ import annotations
 import os, json, time, hashlib, hmac
+import shutil, tempfile
 from engine.policy_compiler import compile_policy
 from engine.respond_guard import ensure_proof_and_package, RespondBlocked
+from provenance.store import CAS
+from provenance.audit import AuditLog
+from policy.policies import DEFAULT_POLICY
+from policy.ttl import enforce_ttl
+
+
+def test_cas_sign_and_verify():
+    root = tempfile.mkdtemp()
+    try:
+        cas = CAS(root, b"secret")
+        digest = cas.put(b"hello", "artifact", "team", {"note":"t"})
+        assert cas.verify_meta(digest)
+        assert cas.get(digest) == b"hello"
+    finally:
+        shutil.rmtree(root)
+
+
+def test_ttl_cleanup():
+    class MemIdx:
+        def __init__(self):
+            self.docs = {"claim":[], "evidence":[], "artifact":[], "session":[]}
+        def iter_docs(self, kind):
+            return list(self.docs[kind])
+        def delete(self, doc_id):
+            for k in self.docs:
+                self.docs[k] = [x for x in self.docs[k] if x[0]!=doc_id]
+    idx = MemIdx()
+    now = time.time()
+    idx.docs["claim"] = [("c1", now-DEFAULT_POLICY.ttl_seconds["claim"]-1)]
+    removed = enforce_ttl(idx, DEFAULT_POLICY, now)
+    assert removed["claim"] == 1
+
 
 def _mk_sig(secret_hex: str, fields, e: dict, algo="sha256"):
     secret = bytes.fromhex(secret_hex)

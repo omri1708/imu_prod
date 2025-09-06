@@ -1,0 +1,13 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"K8sDeploy",
+  "type":"object",
+  "required":["manifests_dir","namespace"],
+  "properties":{
+    "manifests_dir":{"type":"string"},
+    "namespace":{"type":"string"},
+    "wait":{"type":"boolean","default":true},
+    "follow_logs":{"type":"boolean","default":true},
+    "selector":{"type":"string"}
+  }
+}

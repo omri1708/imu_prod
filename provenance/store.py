@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, Tuple
 import hashlib, json, os, time, threading
 import os, json, hashlib, time, base64, hmac
 from typing import Dict, Any, Optional
+from typing import Optional, Literal, Dict, Any
+
 
 class ResourceRequired(RuntimeError):
     def __init__(self, what:str, how:str):
@@ -24,6 +26,97 @@ class ProvenanceError(Exception): pass
 CAS_ROOT = os.environ.get("IMU_CAS_ROOT","./_imu_cas")
 os.makedirs(CAS_ROOT, exist_ok=True)
 
+Trust = Literal["system","org","team","user","external"]
+
+class CAS:
+    """
+    Content-addressable store with HMAC signing and trust levels.
+    Layout:
+      root/
+        objects/ab/cdef...   # content
+        meta/ab/cdef...json  # {"ts":..., "kind":..., "trust":..., "hmac":...}
+    """
+    def __init__(self, root: str, secret: bytes):
+        self.root = root
+        self.secret = secret
+        os.makedirs(os.path.join(root, "objects"), exist_ok=True)
+        os.makedirs(os.path.join(root, "meta"), exist_ok=True)
+
+    @staticmethod
+    def _path(base: str, digest: str, suffix: str=""):
+        # split first two chars as shard
+        shard = digest[:2]
+        return os.path.join(base, shard, digest[2:] + suffix)
+
+    def _ensure_dirs(self, path: str):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    def put(self, content: bytes, kind: str, trust: Trust, extra_meta: Optional[Dict[str,Any]]=None) -> str:
+        digest = hashlib.sha256(content).hexdigest()
+        o_path = self._path(os.path.join(self.root, "objects"), digest)
+        m_path = self._path(os.path.join(self.root, "meta"), digest, ".json")
+        self._ensure_dirs(o_path)
+        self._ensure_dirs(m_path)
+        if not os.path.exists(o_path):
+            with open(o_path, "wb") as f:
+                f.write(content)
+        meta = {
+            "ts": time.time(),
+            "kind": kind,
+            "trust": trust,
+            "size": len(content),
+            "sha256": digest
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+        # HMAC over deterministic JSON
+        meta_json = json.dumps(meta, sort_keys=True, separators=(",",":")).encode("utf-8")
+        sig = hmac.new(self.secret, meta_json, "sha256").hexdigest()
+        meta["hmac"] = sig
+        with open(m_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, separators=(",",":"))
+        return digest
+
+    def get(self, digest: str) -> Optional[bytes]:
+        path = self._path(os.path.join(self.root, "objects"), digest)
+        if not os.path.exists(path): return None
+        with open(path, "rb") as f:
+            return f.read()
+
+    def meta(self, digest: str) -> Optional[Dict[str,Any]]:
+        path = self._path(os.path.join(self.root, "meta"), digest, ".json")
+        if not os.path.exists(path): return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def verify_meta(self, digest: str) -> bool:
+        m = self.meta(digest)
+        if not m: return False
+        # recompute HMAC
+        check = dict(m)
+        sig = check.pop("hmac", None)
+        meta_json = json.dumps(check, sort_keys=True, separators=(",",":")).encode("utf-8")
+        calc = hmac.new(self.secret, meta_json, "sha256").hexdigest()
+        return sig == calc
+
+    def iter_docs(self, kind: Optional[str]=None):
+        """Yield (digest, meta) possibly filtered by kind"""
+        root = os.path.join(self.root, "meta")
+        for shard in os.listdir(root):
+            shard_dir = os.path.join(root, shard)
+            if not os.path.isdir(shard_dir): continue
+            for name in os.listdir(shard_dir):
+                if not name.endswith(".json"): continue
+                m = self.meta(shard + name[:-5])
+                if not m: continue
+                if kind and m.get("kind") != kind: continue
+                yield (m["sha256"], m)
+
+    def delete(self, digest: str):
+        op = self._path(os.path.join(self.root, "objects"), digest)
+        mp = self._path(os.path.join(self.root, "meta"), digest, ".json")
+        if os.path.exists(op): os.remove(op)
+        if os.path.exists(mp): os.remove(mp)
 
 class CAStore:
     """

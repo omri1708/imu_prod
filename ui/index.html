@@ -49,3 +49,63 @@
   </script>
 </body>
 </html>
+
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<title>IMU – Progress & Timeline</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 24px; }
+#prog { width: 100%; height: 12px; background: #eee; border-radius: 6px; overflow: hidden; margin-bottom: 16px; }
+#bar { height: 100%; width: 0%; background: #4caf50; transition: width 200ms; }
+#timeline { max-height: 50vh; overflow:auto; border:1px solid #ddd; padding:8px; }
+.ev { border-bottom:1px dashed #ddd; padding:6px 0; }
+.ev .k { color:#888; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>IMU – Live Progress & Timeline</h1>
+<div id="prog"><div id="bar"></div></div>
+<div id="timeline"></div>
+
+<script>
+const bar = document.getElementById('bar');
+const timeline = document.getElementById('timeline');
+let pct = 0;
+
+function addEv(obj){
+  const div = document.createElement('div');
+  div.className = 'ev';
+  div.innerHTML = `<div class="k">${new Date().toLocaleTimeString()}</div><pre>${JSON.stringify(obj, null, 2)}</pre>`;
+  timeline.prepend(div);
+}
+
+function bumpProgress(delta=3){
+  pct = Math.min(100, pct + delta);
+  bar.style.width = pct + '%';
+}
+
+const ws = new WebSocket(`ws://${location.hostname}:8080/ws`);
+ws.onopen = () => addEv({kind:"ws_open"});
+ws.onmessage = ev => {
+  try {
+    const obj = JSON.parse(ev.data);
+    addEv(obj);
+    if (obj.kind === 'capability_request') bumpProgress(5);
+    if (obj.kind === 'adapter_dry_run') bumpProgress(2);
+  } catch (e) {
+    addEv({kind:"parse_error", msg:e.toString()});
+  }
+};
+ws.onclose = () => addEv({kind:"ws_close"});
+
+// דוגמת קריאה ל-HTTP לבקש יכולת (dry-run)
+fetch('http://'+location.hostname+':8081/capabilities/request', {
+  method: 'POST',
+  headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({ name: "k8s_cli", dry_run: true, user_id:"demo", trust_level:2, allow_exec:false, allow_network:false })
+}).then(r => r.json()).then(j => addEv({kind:"http_reply", j}));
+</script>
+</body>
+</html>

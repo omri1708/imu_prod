@@ -1,5 +1,5 @@
 import os, json, tempfile
-from typing import Dict
+from typing import Dict, Any
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from common.exc import ResourceRequired
@@ -7,7 +7,8 @@ from storage import cas
 from storage.provenance import record_provenance
 import shutil, subprocess, json, tempfile, os
 from .contracts import AdapterResult, require
-
+from adapters.base import AdapterBase, PlanResult
+from engine.policy import RequestContext
 
 
 
@@ -43,8 +44,16 @@ def deploy_k8s_manifest(manifest_yaml: str, namespace: str="default") -> Adapter
         try: os.remove(path)
         except Exception: pass
 
-class K8sAdapter:
+class K8sAdapter(AdapterBase):
     """בניית מניפסט K8s ו-rollout מדורג."""
+    name = "k8s"
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
+        ns = spec.get("namespace","default")
+        file = spec.get("manifest","deploy.yaml")
+        dry = "--dry-run=client" if spec.get("client_dry_run", True) else ""
+        cmds = [f"kubectl apply -n {ns} -f {file} {dry}".strip()]
+        return PlanResult(commands=cmds, env={}, notes="kubectl apply")
+
     def build(self, job: Dict, user: str, workspace: str, policy, ev_index) -> AdapterResult:
         _need("kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/")
         manifest = job.get("manifest") or ""

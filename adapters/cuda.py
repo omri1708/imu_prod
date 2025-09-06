@@ -5,14 +5,15 @@ from typing import Dict, Any
 from common.exc import ResourceRequired
 from adapters.base import BuildAdapter, BuildResult
 from adapters.provenance_store import cas_put, evidence_for, register_evidence
-import os
-from typing import Dict
+
+
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
-import shutil, subprocess, os
 from .contracts import AdapterResult, require
+from adapters.base import AdapterBase, PlanResult
 
+from engine.policy import RequestContext
 
 def run_cuda_job(script:str) -> AdapterResult:
     nvcc = shutil.which("nvcc")
@@ -25,9 +26,17 @@ def run_cuda_job(script:str) -> AdapterResult:
     except Exception as e:
         return AdapterResult(False, str(e), {})
 
-class CUDAAdapter(BuildAdapter):
+class CUDAAdapter(AdapterBase, BuildAdapter):
     KIND = "cuda"
-
+    name = "cuda"
+    
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
+        src = spec.get("src","kernel.cu")
+        out = spec.get("out","kernel.out")
+        arch = spec.get("arch","sm_86")
+        cmds = [f"nvcc -arch={arch} {src} -o {out}"]
+        return PlanResult(commands=cmds, env={}, notes="nvcc compile")
+    
     def detect(self) -> bool:
         return bool(shutil.which("nvcc"))
 

@@ -72,3 +72,79 @@
   }
   customElements.define('event-timeline', EventTimeline);
 })();
+
+// Lightweight client runtime (vanilla JS)
+export function mountProgressBar(el, topic, broker) {
+  let val = 0;
+  const bar = document.createElement('div');
+  bar.style.height = '8px';
+  bar.style.background = '#eee';
+  const fill = document.createElement('div');
+  fill.style.height = '8px';
+  fill.style.width = '0%';
+  fill.style.background = '#4caf50';
+  bar.appendChild(fill);
+  el.appendChild(bar);
+  broker.subscribe(topic, (evt) => {
+    if (typeof evt.progress === 'number') {
+      val = Math.max(0, Math.min(100, evt.progress));
+      fill.style.width = val + '%';
+    }
+  });
+}
+
+export function mountEventTimeline(el, topic, broker) {
+  const list = document.createElement('ul');
+  list.style.listStyle = 'none';
+  list.style.padding = '0';
+  el.appendChild(list);
+  broker.subscribe(topic, (evt) => {
+    const li = document.createElement('li');
+    li.textContent = `[${new Date().toISOString()}] ${evt.message || JSON.stringify(evt)}`;
+    list.appendChild(li);
+    if (list.childNodes.length > 200) list.removeChild(list.firstChild);
+  });
+}
+
+export function mountDataTable(el, topic, broker, { freezeLeft=1 } = {}) {
+  const table = document.createElement('table');
+  table.style.borderCollapse = 'collapse';
+  table.style.width = '100%';
+  const thead = document.createElement('thead');
+  const tbody = document.createElement('tbody');
+  table.appendChild(thead); table.appendChild(tbody);
+  el.appendChild(table);
+  let columns = null;
+  broker.subscribe(topic, (evt) => {
+    if (evt.columns && !columns) {
+      columns = evt.columns;
+      const tr = document.createElement('tr');
+      columns.forEach((c, idx) => {
+        const th = document.createElement('th');
+        th.textContent = c;
+        th.style.position = idx < freezeLeft ? 'sticky' : 'static';
+        th.style.left = idx < freezeLeft ? (idx*120)+'px' : '0';
+        th.style.background = '#fff';
+        th.style.borderBottom = '1px solid #ddd';
+        th.style.padding = '4px 8px';
+        tr.appendChild(th);
+      });
+      thead.appendChild(tr);
+    }
+    if (evt.row) {
+      const tr = document.createElement('tr');
+      evt.row.forEach((v, idx) => {
+        const td = document.createElement('td');
+        td.textContent = String(v);
+        td.style.position = idx < freezeLeft ? 'sticky' : 'static';
+        td.style.left = idx < freezeLeft ? (idx*120)+'px' : '0';
+        td.style.background = idx < freezeLeft ? '#fafafa':'#fff';
+        td.style.borderBottom = '1px solid #f0f0f0';
+        td.style.padding = '4px 8px';
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+      if (tbody.childNodes.length > 1000) tbody.removeChild(tbody.firstChild);
+    }
+  });
+}

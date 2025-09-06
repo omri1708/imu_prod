@@ -2,19 +2,17 @@
 # -*- coding: utf-8 -*-
 import os, shutil, subprocess
 from typing import Dict, Any, List
-import os, subprocess, shutil
-from typing import Dict, Any
+
+
 from common.exc import ResourceRequired
 from adapters.base import BuildAdapter, BuildResult
 from adapters.provenance_store import cas_put, evidence_for, register_evidence
 from adapters.base import _need, run, put_artifact_text, evidence_from_text
 from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
-from .contracts import AdapterResult
-
-
-import os, subprocess, shutil
 from .contracts import AdapterResult, require
+from adapters.base import AdapterBase, PlanResult
+from engine.policy import RequestContext
 
 
 def build_android_gradle(project_dir:str) -> AdapterResult:
@@ -60,8 +58,16 @@ def _find_apk(root:str) -> str|None:
                 return os.path.join(dp, f)
     return None
 
-class AndroidAdapter(BuildAdapter):
+class AndroidAdapter(AdapterBase, BuildAdapter):
     KIND = "android"
+    name = "android"
+    
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
+        module = spec.get("module", "app")
+        variant = spec.get("variant", "Debug")
+        cmds = [f"./gradlew :{module}:assemble{variant} --no-daemon"]
+        env = {}
+        return PlanResult(commands=cmds, env=env, notes="gradle assemble")
 
     def detect(self) -> bool:
         gradle = shutil.which("gradle") or shutil.which("./gradlew")

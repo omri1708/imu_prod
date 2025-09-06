@@ -1,20 +1,58 @@
 # adapters/k8s/deploy.py
 # -*- coding: utf-8 -*-
 import os, shutil, subprocess, tempfile, yaml
+from typing import Dict, Any, Optional, List
 from ..contracts import ensure_tool, run, record_provenance
 from adapters.contracts import ResourceRequired
-import subprocess, shlex, time
+import shlex, time
 from contracts.adapters import k8s_env
+from provenance.audit import AuditLog
+
+
+def _kubectl(*parts):
+    return " ".join(["kubectl"] + [shlex.quote(p) for p in parts])
+
+
+def run_k8s_deploy(cfg: Dict[str,Any], audit: AuditLog):
+    man_dir = cfg["manifests_dir"]
+    ns = cfg["namespace"]
+    wait = cfg.get("wait", True)
+    follow = cfg.get("follow_logs", True)
+    selector = cfg.get("selector","app=imu")
+    # ensure ns
+    subprocess.call(_kubectl("create","ns",ns), shell=True)
+    # apply
+    cmd_apply = _kubectl("-n", ns, "apply", "-f", man_dir)
+    audit.append("adapter.k8s","apply",{"cmd":cmd_apply})
+    subprocess.check_call(cmd_apply, shell=True)
+    if wait:
+        cmd_wait = _kubectl("-n", ns, "rollout", "status", "deployment","-l", selector, "--timeout=120s")
+        audit.append("adapter.k8s","wait",{"cmd":cmd_wait})
+        subprocess.check_call(cmd_wait, shell=True)
+    if follow:
+        # follow first pod matching selector
+        get_pod = _kubectl("-n", ns, "get","pods","-l", selector, "-o","jsonpath={.items[0].metadata.name}")
+        pod = subprocess.check_output(get_pod, shell=True, text=True)
+        cmd_logs = _kubectl("-n", ns, "logs", "-f", pod.strip())
+        audit.append("adapter.k8s","logs",{"cmd":cmd_logs})
+        # non-blocking stream tip: tail few lines
+        subprocess.Popen(cmd_logs, shell=True)
+    audit.append("adapter.k8s","success",{"namespace":ns})
+    return {"ok": True, "namespace": ns}
+
 
 def kubectl(cmd: str):
     k8s_env()
     subprocess.check_call(f"kubectl {cmd}", shell=True)
 
+
 def apply_safe(manifest: str):
     kubectl(f"apply -f {shlex.quote(manifest)}")
 
+
 def rollout_status(kind: str, name: str, ns: str = "default", timeout: int = 300):
     kubectl(f"-n {shlex.quote(ns)} rollout status {kind}/{name} --timeout={timeout}s")
+
 
 def canary_and_rollout(main_manifest: str, canary_manifest: str, *, kind="deployment", name="app", ns="default"):
     # שלב 1: Canary
@@ -26,6 +64,7 @@ def canary_and_rollout(main_manifest: str, canary_manifest: str, *, kind="deploy
     apply_safe(main_manifest)
     rollout_status(kind, name, ns)
     
+
 BASIC_DEPLOY_YAML = """\
 apiVersion: apps/v1
 kind: Deployment
@@ -59,6 +98,7 @@ spec:
     targetPort: {port}
 """
 
+
 def deploy(name: str, image: str, port: int = 80, replicas: int = 1, kubeconfig: str = None) -> dict:
     ensure_tool("kubectl", "Install kubectl and configure KUBECONFIG")
     y = BASIC_DEPLOY_YAML.format(name=name, image=image, port=port, replicas=replicas)
@@ -71,10 +111,6 @@ def deploy(name: str, image: str, port: int = 80, replicas: int = 1, kubeconfig:
     prov = record_provenance("k8s_apply", {"name": name, "image": image}, manifest)
     return {"manifest": manifest, "provenance": prov.__dict__, "log": out}
 
-def _kubectl():
-    if not shutil.which("kubectl"):
-        raise ResourceRequired("kubectl", "Install kubectl and configure context")
-    return "kubectl"
 
 def apply_manifest(manifest: dict, namespace: str = None):
     kc = _kubectl()
@@ -85,6 +121,7 @@ def apply_manifest(manifest: dict, namespace: str = None):
     if namespace: cmd += ["-n", namespace]
     subprocess.run(cmd, check=True)
     return {"ok": True, "applied": path}
+
 
 def deploy_image(image: str, name: str = "imu-job", namespace: str = None, gpu: bool = False):
     # Job בסיסי; GPU אופציונלי (nodeSelector/tolerations בהתאם לסביבה שלך)

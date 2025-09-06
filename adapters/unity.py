@@ -12,7 +12,8 @@ from engine.adapter_types import AdapterResult
 from storage.provenance import record_provenance
 import shutil, subprocess, os, sys
 from .contracts import AdapterResult, require
-
+from adapters.base import AdapterBase, PlanResult
+from engine.policy import RequestContext
 
 def unity_batchmode(project_path:str, build_target:str="Android") -> AdapterResult:
     unity = _find_unity()
@@ -52,9 +53,18 @@ def run_unity_cli(project_dir: str, target: str="StandaloneLinux64") -> AdapterR
     except subprocess.CalledProcessError as e:
         return AdapterResult(status="error", message=f"Unity build failed: {e}", outputs={})
 
-class UnityAdapter(BuildAdapter):
+class UnityAdapter(AdapterBase, BuildAdapter):
     KIND = "unity"
-
+    name = "unity"
+    
+    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
+        proj = spec.get("projectPath",".")
+        target = spec.get("buildTarget","StandaloneWindows64")
+        out = spec.get("output","Build/build.exe")
+        cmds = [f"unity -quit -batchmode -projectPath {proj} -buildTarget {target} -executeMethod BuildScript.Build -logFile -",
+                f"echo artifact at {out}"]
+        return PlanResult(commands=cmds, env={}, notes="unity batch build")
+    
     def detect(self) -> bool:
         return bool(shutil.which("Unity") or shutil.which("/Applications/Unity/Hub/Editor/Unity.app/Contents/MacOS/Unity"))
 
