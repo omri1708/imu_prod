@@ -14,15 +14,20 @@ from server.stream_wfq import BROKER  # WFQ Broker
 
 APP = FastAPI(title="IMU Adapter API")
 
+from policy.policy_hotload import start_watcher
+start_watcher("security/policy_rules.yaml", interval_s=2.0)
+
 from server.provenance_api import router as prov_router
 from server.metrics_api import router as metrics_router
 from server.supplychain_api import router as supply_router
 from server.stream_gateway import router as events_router
 from server.supplychain_index_api import router as sc_index_router
-from policy.policy_hotload import start_watcher
 from server.runbook_api import router as runbook_router
+from server.key_admin_api import router as key_admin_router
+from server.archive_api import router as archive_router
 
-start_watcher("security/policy_rules.yaml", interval_s=2.0)
+APP.include_router(archive_router)
+APP.include_router(key_admin_router)
 APP.include_router(prov_router)
 APP.include_router(metrics_router)
 APP.include_router(supply_router)
