@@ -43,12 +43,16 @@ from server.gh_status_api import router as gh_status_router
 from server.scheduler_api import router as scheduler_router, scheduler_boot
 from server.metrics_jobs_api import router as jobs_metrics_router
 from server.stream_policy_router import start_policy_router
+from server.synth_adapter_api import router as synth_router
+from adapters.synth.registry import get_template as dyn_get_template, find_contract as dyn_find_contract
+from adapters.validate import validate_params
 
 APP.include_router(scheduler_router)
 
 scheduler_boot()
 start_policy_router()
 
+APP.include_router(synth_router)
 APP.include_router(jobs_metrics_router)
 APP.include_router(gh_status_router)
 APP.include_router(auto_canary_router)
@@ -73,7 +77,20 @@ APP.include_router(events_router)
 APP.include_router(sc_index_router)
 APP.include_router(runbook_router)
 
+# ----------- helper---------
+def _resolve_template(kind: str, fam: str) -> str | None:
+    # dynamic first, fallback to builtin
+    t = dyn_get_template(kind, fam)
+    if t: return t
+    from adapters.mappings import CLI_TEMPLATES as BUILTIN
+    tm = BUILTIN.get(kind)
+    if not tm: return None
+    return tm.get(fam) or tm.get("any")
 
+def _validate_contract_if_exists(kind: str, params: Dict[str,Any]):
+    contract = dyn_find_contract(kind)
+    if contract:
+        validate_params(str(contract), params)
 # ---------- Utils ----------
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
@@ -153,32 +170,33 @@ async def request_capability(req: CapabilityRequest):
 # ---------- Adapters: dry_run / run ----------
 class DryRunRequest(BaseModel):
     user_id: str
-    kind: str          # "unity.build" | "android.gradle" | "ios.xcode" | "k8s.kubectl.apply" | "cuda.nvcc"
+    kind: str
     params: Dict[str, Any]
 
 @APP.post("/adapters/dry_run", response_model=RunResult)
 async def adapters_dry_run(req: DryRunRequest):
-    require_perm(req.user_id, f"adapter:dry_run:{req.kind}")
     fam = _os_family()
-    tmpl_map = CLI_TEMPLATES.get(req.kind)
-    if not tmpl_map:
-        raise HTTPException(400, "unknown kind")
-    tmpl = tmpl_map.get(fam) or tmpl_map.get("any")
+    tmpl = _resolve_template(req.kind, fam)
     if not tmpl:
-        raise HTTPException(400, "unsupported on this OS")
+        raise HTTPException(400, "unknown kind")
+    # validate contract if present
+    try:
+        _validate_contract_if_exists(req.kind, req.params)
+    except Exception as e:
+        return RunResult(ok=False, cmd="", reason=f"contract_violation:{e}", evidence=[])
 
-    # Compose deterministically
+    # deterministic composition
     try:
         cmd = tmpl.format(**req.params)
     except KeyError as e:
         return RunResult(ok=False, cmd="", reason=f"missing_param:{e.args[0]}", evidence=[])
 
-    # Hard deny tokens
+    # hard tokens
     forbidden_tokens = [" rm -rf ", " :(){", "mkfs", " dd if=", ";rm -rf", "&& rm -rf"]
     if any(t in f" {cmd} " for t in forbidden_tokens):
         return RunResult(ok=False, cmd=cmd, reason="blocked_by_policy", evidence=[])
 
-    # FS gating on known param keys
+    # FS gating minimal (read/write keys)
     path_keys_read  = ["project", "workspace", "manifest", "src", "log"]
     path_keys_write = ["out", "keystore"]
     for k in path_keys_read:
@@ -200,20 +218,19 @@ class RunAdapterRequest(BaseModel):
     user_id: str
     kind: str
     params: Dict[str, Any]
-    execute: bool = False  # True => להריץ בפועל
+    execute: bool = False
 
 @APP.post("/adapters/run", response_model=RunResult)
 async def adapters_run(req: RunAdapterRequest):
-    require_perm(req.user_id, f"adapter:dry_run:{req.kind}")
     t0 = time.time()
     BROKER.ensure_topic("timeline", rate=50, burst=200, weight=2)
     BROKER.ensure_topic("progress", rate=80, burst=400, weight=3)
     BROKER.submit("timeline","api",{"type":"event","ts":time.time(),"note":f"run {req.kind} start"}, priority=2)
 
-    # First dry-run
     dry = await adapters_dry_run(DryRunRequest(user_id=req.user_id, kind=req.kind, params=req.params))
     if not dry.ok:
         return dry
+
     if not req.execute:
         BROKER.submit("progress","api",{"type":"progress","ts":time.time(),"pct":50,"note":"dry_run_only"}, priority=6)
         ms = (time.time()-t0)*1000
@@ -224,7 +241,7 @@ async def adapters_run(req: RunAdapterRequest):
             BROKER.submit("timeline","api",{"type":"event","ts":time.time(),"note":str(e)}, priority=1)
         return dry
 
-    # Execute if binary present
+    # execution path
     bin_name = dry.cmd.split()[0]
     if not shutil.which(bin_name):
         cap = req.kind.split('.', 1)[0]
