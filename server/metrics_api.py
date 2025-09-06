@@ -1,21 +1,27 @@
-# server/metrics_api.py
-# FastAPI Router למדדים: p95 per-key, סטטיסטיקות WFQ, ו-state של נושאים פעילים.
+# server/metrics_api.py  (UPDATED)
 from __future__ import annotations
 from fastapi import APIRouter
 from typing import Dict, Any
-from runtime.p95 import GATES
+from runtime.p95 import GATES  # windows store sorted values
 from .stream_wfq_stats import broker_stats
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
+def _percentile(vals, q):
+    if not vals: return 0.0
+    n=len(vals); idx=int(q*(n-1))
+    return float(vals[idx])
+
 @router.get("/summary")
 def summary() -> Dict[str, Any]:
-    # p95 (צילום מצב) — שומר את הערכים המחושבים ללא התאפסות
-    p95_snapshot = {}
+    p_snapshot={}
     for key, win in getattr(GATES, "windows", {}).items():
-        p95_snapshot[key] = {"count": len(win.values), "p95_ms": win.p95()}
-    return {
-        "ok": True,
-        "p95": p95_snapshot,
-        "wfq": broker_stats(),
-    }
+        vals = list(win.values)  # already sorted
+        p_snapshot[key] = {
+            "count": len(vals),
+            "p50_ms": _percentile(vals, 0.50),
+            "p90_ms": _percentile(vals, 0.90),
+            "p95_ms": _percentile(vals, 0.95),
+            "p99_ms": _percentile(vals, 0.99),
+        }
+    return {"ok": True, "latency": p_snapshot, "wfq": broker_stats()}

@@ -32,7 +32,15 @@ from server.replay_api import router as replay_router
 from server.gitops_api import router as gitops_router
 from server.audit_ops import AuditMiddleware
 from server.gitops_guard_api import router as guard_router
+from server.gitops_checks_api import router as gh_checks_router
+from server.policy_edit_api import router as policy_edit_router
+from server.webhooks_api import router as webhooks_router
+from server.gatekeeper_api import router as gatekeeper_router
 
+APP.include_router(gatekeeper_router)
+APP.include_router(webhooks_router)
+APP.include_router(policy_edit_router)
+APP.include_router(gh_checks_router)
 APP.include_router(guard_router)
 APP.add_middleware(AuditMiddleware)
 APP.include_router(gitops_router)
