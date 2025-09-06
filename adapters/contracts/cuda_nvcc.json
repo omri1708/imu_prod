@@ -1,0 +1,10 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"CUDA_NVCC",
+  "type":"object",
+  "required":["src","out"],
+  "properties":{
+    "src":{"type":"string","minLength":1},
+    "out":{"type":"string","minLength":1}
+  }
+}

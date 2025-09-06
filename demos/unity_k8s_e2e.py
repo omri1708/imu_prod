@@ -1,40 +1,52 @@
-# demos/unity_k8s_e2e.py
+# demos/unity_k8s_end2end.py
+"""
+Unity → build (execute if CLI found else dry) → package (optional docker) → deploy to k8s (dry if kubectl missing)
+→ push live progress to WS and to UI timeline.
+"""
 from __future__ import annotations
-import os, subprocess, shutil, tempfile, json
-from typing import Optional
-from adapters.installer import ensure
-from common.provenance import CAS
-from security.policy import UserPolicy, check_fs, check_network, record_audit
-from common.ws_progress import WSProgress
-import hashlib, time
+import os, json, time, asyncio, shutil, platform, tempfile, subprocess
+from typing import Dict, Any
+import websockets  # pip install websockets
 
-def run(cmd:list, cwd:Optional[str]=None):
-    print("+", " ".join(cmd))
-    return subprocess.run(cmd, check=True, cwd=cwd)
+HTTP = os.environ.get("IMU_API","http://127.0.0.1:8000")
+WS   = os.environ.get("IMU_WS", "ws://127.0.0.1:8765")
+USER = os.environ.get("IMU_USER","demo-user")
 
-def build_unity(project_dir:str, build_target:str, out_dir:str):
-    # דרוש Unity Hub/CLI; בדיקות גמישות: unity, Unity, unity-editor
-    unity = shutil.which("unity") or shutil.which("Unity") or shutil.which("unity-editor")
-    if not unity:
-        raise RuntimeError("Unity CLI not found. Install Unity Hub/Editor and expose CLI.")
-    os.makedirs(out_dir, exist_ok=True)
-    # דוגמת build headless (תלוי גרסת Unity)
-    run([unity,
-         "-quit","-batchmode",
-         "-projectPath", project_dir,
-         "-buildTarget", build_target,
-         "-executeMethod","BuildScript.CommandLineBuild",
-         "-logFile", os.path.join(out_dir,"unity_build.log")])
+def _which(x:str)->bool:
+    from shutil import which; return which(x) is not None
 
-def docker_build_push(image:str, context:str):
-    run(["docker","build","-t",image,context])
-    run(["docker","push",image])
+async def push(kind:str, data:Dict[str,Any]):
+    async with websockets.connect(WS) as ws:
+        msg={"type":kind,"ts":time.time(),"pct":data.get("pct"),"note":data.get("note")}
+        await ws.send(json.dumps(msg, ensure_ascii=False))
 
-def k8s_deploy(image:str, namespace:str, name:str):
-    manifest=f"""
+def http_post(path:str, payload:dict) -> dict:
+    import urllib.request
+    req = urllib.request.Request(HTTP+path, method="POST",
+                                 data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type":"application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+async def run(project_dir:str, target:str="Android", k8s_ns:str="default", name:str="unity-web"):
+    await push("event", {"note":"unity.e2e.start"})
+    # 1) build unity (exec when possible)
+    params={"project":project_dir,"target":target,"method":"Builder.PerformBuild","version":"2022.3.44f1","log":"/tmp/unity.log"}
+    await push("progress", {"pct":5, "note":"unity.build.prepare"})
+    dry = http_post("/adapters/dry_run", {"user_id":USER,"kind":"unity.build","params":params})
+    await push("event", {"note": f"unity.dry.cmd={dry.get('cmd')}"})
+    do_exec = _which("unity") or _which("Unity") or _which("unity-editor")
+    res = http_post("/adapters/run", {"user_id":USER,"kind":"unity.build","params":params,"execute": bool(do_exec)})
+    await push("progress", {"pct":50, "note": "unity.build.done" if res["ok"] else "unity.build.dry"})
+
+    # 2) package to docker (optional)(skipped: environment dependent)
+    await push("progress", {"pct":65, "note":"package.skip_or_external"})
+
+    # 3) deploy to k8s (dry if kubectl missing)
+    man = f"""
 apiVersion: apps/v1
 kind: Deployment
-metadata: {{name: {name}, namespace: {namespace}}}
+metadata: {{name: {name}, namespace: {k8s_ns}}}
 spec:
   replicas: 1
   selector: {{matchLabels: {{app: {name}}}}}
@@ -42,61 +54,22 @@ spec:
     metadata: {{labels: {{app: {name}}}}}
     spec:
       containers:
-      - name: {name}
-        image: {image}
-        ports: [{{containerPort: 8080}}]
+      - name: web
+        image: nginx:alpine
+        ports: [{{containerPort: 80}}]
 """
-    with tempfile.NamedTemporaryFile("w", delete=False) as f:
-        f.write(manifest); path=f.name
-    run(["kubectl","apply","-f",path])
-
-def main(project_dir:str, build_target:str, image:str, namespace:str, name:str,
-         user="default", ws_url="ws://localhost:8765"):
-    policy = UserPolicy(user_id=user)
-    # מדיניות קבצים/רשת (deny-all ברירת מחדל) – נבדוק נקודות קריטיות:
-    check_fs(policy,"read", project_dir)
-    check_network(policy,"connect","registry-1.docker.io",443)
-    check_network(policy,"connect","localhost",6443)  # דוגמה ל־k8s local
-
-    # כלים נדרשים
-    ensure("docker","docker")
-    ensure("kubectl","kubectl")
-
-    ws = WSProgress(ws_url, topic=f"unity:{name}")
-    cas=CAS("cas")
-
-    # 1) Build
-    ws.emit("progress", {"phase":"unity_build","pct":5})
-    out_dir=os.path.join("artifacts","unity_build"); os.makedirs(out_dir, exist_ok=True)
-    build_unity(project_dir, build_target, out_dir)
-    ws.emit("progress", {"phase":"unity_build","pct":60})
-
-    # 2) Package (Docker)
-    # נבנה Dockerfile מינימלי אם לא קיים
-    df=os.path.join(project_dir,"Dockerfile")
-    if not os.path.exists(df):
-        with open(df,"w") as f:
-            f.write("FROM nginx:alpine\nCOPY ./Build /usr/share/nginx/html\n")
-    docker_build_push(image, project_dir)
-    ws.emit("progress", {"phase":"docker_push","pct":80})
-
-    # 3) Deploy to K8s
-    k8s_deploy(image, namespace, name)
-    ws.emit("progress", {"phase":"k8s_deploy","pct":95})
-
-    # 4) Evidence & CAS
-    # נארוז ארטיפקט לדוגמה
-    bundle=os.path.join(out_dir,"bundle.zip")
-    shutil.make_archive(bundle[:-4], "zip", out_dir)
-    ev=cas.put(bundle)
-    record_audit("publish_artifact", user, {"sha256": ev.sha256, "path": ev.path, "image": image})
-
-    ws.emit("done", {"phase":"complete","pct":100,"artifact_sha256": ev.sha256})
+    await push("progress", {"pct":75, "note":"k8s.apply.prepare"})
+    kdry = http_post("/adapters/dry_run", {"user_id":USER,"kind":"k8s.kubectl.apply","params":{"manifest":man,"namespace":k8s_ns}})
+    await push("event", {"note": f"k8s.dry.cmd={kdry.get('cmd')}"})
+    do_k = _which("kubectl")
+    kres = http_post("/adapters/run", {"user_id":USER,"kind":"k8s.kubectl.apply","params":{"manifest":man,"namespace":k8s_ns},"execute": bool(do_k)})
+    await push("progress", {"pct":100, "note":"k8s.deploy.done" if kres["ok"] else "k8s.deploy.dry"})
+    await push("event", {"note":"unity.e2e.finish"})
 
 if __name__=="__main__":
-    # דוגמה: python demos/unity_k8s_e2e.py /path/to/UnityProject WebGL myrepo/unity:latest default gameweb
     import sys
-    if len(sys.argv)<6:
-        print("usage: unity_k8s_e2e.py <project_dir> <build_target> <image> <namespace> <name>")
-        sys.exit(2)
-    main(*sys.argv[1:6])
+    if len(sys.argv)<2:
+        print("usage: unity_k8s_end2end.py <UnityProjectDir> [target Android|WebGL|...]\n"
+              "env: IMU_API=http://127.0.0.1:8000  IMU_WS=ws://127.0.0.1:8765")
+        raise SystemExit(2)
+    asyncio.run(run(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else "Android"))

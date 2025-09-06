@@ -1,0 +1,11 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"IOSXcode",
+  "type":"object",
+  "required":["workspace","scheme","config"],
+  "properties":{
+    "workspace":{"type":"string","minLength":1},
+    "scheme":{"type":"string","minLength":1},
+    "config":{"type":"string","enum":["Debug","Release"]}
+  }
+}
