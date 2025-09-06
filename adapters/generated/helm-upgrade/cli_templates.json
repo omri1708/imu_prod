@@ -1,0 +1,6 @@
+{
+  "kind": "helm.upgrade",
+  "templates": {
+    "any": "helm upgrade --install {release} {chart_dir} -n {namespace} -f {values_file}{extra_opt}"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "kind": "queue.rabbitmq.publish",
+  "templates": {
+    "any": "rabbitmqadmin -H {host} -P {port}{user_opt}{pass_opt}{vhost_opt} publish exchange={exchange} routing_key={routing_key} payload=\"{payload}\"{props_opt}"
+  }
+}

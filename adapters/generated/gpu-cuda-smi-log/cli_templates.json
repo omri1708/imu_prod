@@ -1,0 +1,6 @@
+{
+  "kind": "gpu.cuda.smi-log",
+  "templates": {
+    "any": "nvidia-smi --query-gpu={query}{format_opt} -l {interval_s}{count_opt}"
+  }
+}
