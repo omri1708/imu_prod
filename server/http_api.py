@@ -36,7 +36,12 @@ from server.gitops_checks_api import router as gh_checks_router
 from server.policy_edit_api import router as policy_edit_router
 from server.webhooks_api import router as webhooks_router
 from server.gatekeeper_api import router as gatekeeper_router
-
+from server.merge_guard_api import router as merge_guard_router
+from server.canary_controller import router as canary_router
+from server.canary_auto_api import router as auto_canary_router
+APP.include_router(auto_canary_router)
+APP.include_router(canary_router)
+APP.include_router(merge_guard_router)
 APP.include_router(gatekeeper_router)
 APP.include_router(webhooks_router)
 APP.include_router(policy_edit_router)

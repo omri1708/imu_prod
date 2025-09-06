@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Auto-Canary</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:380px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+.progress{height:8px;background:#1a2240;border-radius:999px;overflow:hidden}
+.progress>div{height:100%;width:0%;background:linear-gradient(90deg,#4ea1ff,#7cf);transition:width .25s ease}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Auto-Canary</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Start</h3>
+    <label>Namespace</label><input id="ns" value="default"/>
+    <label>App</label><input id="app" value="imu-app"/>
+    <label>Image</label><input id="img" value="nginx:alpine"/>
+    <label>Total replicas</label><input id="rep" type="number" value="10"/>
+    <label>Canary %</label><input id="cp" type="number" value="10"/>
+    <label>Probe URL</label><input id="pr" value="http://localhost:8080/"/>
+    <h4>Policy</h4>
+    <label>max_error_rate</label><input id="er" type="number" step="0.001" value="0.02"/>
+    <label>max_p95_ms</label><input id="p95" type="number" value="800"/>
+    <label>step_percent</label><input id="sp" type="number" value="10"/>
+    <label>hold_seconds</label><input id="hold" type="number" value="30"/>
+    <label>consecutive_ok_for_promote</label><input id="okn" type="number" value="2"/>
+    <div style="margin-top:8px"><button id="btn_start">Start</button> <button id="btn_status">Status</button></div>
+    <pre id="out"></pre>
+  </div>
+  <div class="card">
+    <h3>Timeline</h3>
+    <table id="tbl"><thead><tr><th>time</th><th>event</th></tr></thead><tbody></tbody></table>
+    <div class="progress"><div id="bar"></div></div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(p,b){ const r=await fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j; }
+$("#btn_start").onclick=async()=>{
+  const body={user_id:"demo-user",namespace:$("#ns").value,app:$("#app").value,image:$("#img").value,total_replicas:parseInt($("#rep").value),canary_percent:parseInt($("#cp").value),probe_url:$("#pr").value,policy:{
+    max_error_rate:parseFloat($("#er").value),max_p95_ms:parseInt($("#p95").value),step_percent:parseInt($("#sp").value),hold_seconds:parseInt($("#hold").value),consecutive_ok_for_promote:parseInt($("#okn").value)
+  }};
+  const j=await api('/auto_canary/start',body); $("#out").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_status").onclick=async()=>{
+  const r=await fetch('/auto_canary/status'); const j=await r.json(); $("#out").textContent=JSON.stringify(j,null,2);
+};
+function row(note){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td><td>${note}</td>`; $("#tbl tbody").prepend(tr); const rows=$("#tbl tbody").children; if(rows.length>400) rows[rows.length-1].remove(); }
+function setPct(p){ $("#bar").style.width=Math.max(0,Math.min(100,p))+'%'; }
+(function connect(){
+  const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=timeline`;
+  const ws=new WebSocket(url);
+  ws.onmessage=ev=>{ try{ const o=JSON.parse(ev.data); row(o.note||o.type||'evt'); if(o.type==='progress'&&typeof o.pct==='number') setPct(o.pct);}catch(e){} };
+  ws.onclose=()=>setTimeout(connect,1500);
+})();
+</script>
+</body>
+</html>
