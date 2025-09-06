@@ -11,10 +11,25 @@ from security.filesystem_policies import is_path_allowed, cleanup_ttl, FS_DB
 from adapters.mappings import WINGET, BREW, APT, CLI_TEMPLATES
 from runtime.p95 import GATES
 from server.stream_wfq import BROKER  # WFQ Broker
-from server.provenance_api import router as prov_router
 
 APP = FastAPI(title="IMU Adapter API")
+
+from server.provenance_api import router as prov_router
+from server.metrics_api import router as metrics_router
+from server.supplychain_api import router as supply_router
+from server.stream_gateway import router as events_router
+from server.supplychain_index_api import router as sc_index_router
+from policy.policy_hotload import start_watcher
+from server.runbook_api import router as runbook_router
+
+start_watcher("security/policy_rules.yaml", interval_s=2.0)
 APP.include_router(prov_router)
+APP.include_router(metrics_router)
+APP.include_router(supply_router)
+APP.include_router(events_router)
+APP.include_router(sc_index_router)
+APP.include_router(runbook_router)
+
 
 # ---------- Utils ----------
 def sha256_bytes(b: bytes) -> str:
