@@ -7,8 +7,11 @@ import os, json, urllib.request
 
 from server.gitops_checks_api import _gh  # משתמשים באותה פונקציה
 from runtime.p95 import GATES
+from server.gitops_checks_api import _gh
+from runtime.p95 import GATES
 
 router = APIRouter(prefix="/gatekeeper", tags=["gatekeeper"])
+
 
 class EvidenceReq(BaseModel):
     digest: str
@@ -90,3 +93,33 @@ def evaluate(req: EvaluateReq):
             reasons.append("p95:exceeded")
             return {"ok": False, "reasons": reasons}
     return {"ok": True}
+
+class EvalStatusReq(BaseModel):
+    # Gate inputs:
+    evidences: List[Dict[str,Any]] = Field(default_factory=list)
+    checks: Optional[Dict[str,Any]] = None
+    p95: Optional[Dict[str,Any]] = None
+    # Status:
+    owner: str
+    repo: str
+    sha: str
+    context: str = "IMU/Gatekeeper"
+    pass_description: str = "all gates passed"
+    fail_description: str = "gates failed"
+
+@router.post("/evaluate_and_set_status")
+def evaluate_and_set_status(req: EvalStatusReq):
+    gates = evaluate({"evidences": req.evidences, "checks": req.checks, "p95": req.p95})  # reuse evaluate
+    ok = gates.get("ok", False)
+    state = "success" if ok else "failure"
+    desc  = req.pass_description if ok else req.fail_description
+    # forward to status API
+    try:
+        url="http://127.0.0.1:8000/status/github/set"
+        payload={"user_id":"demo-user","owner":req.owner,"repo":req.repo,"sha":req.sha,"state":state,"context":req.context,"description":desc}
+        rq=urllib.request.Request(url, method="POST", data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
+        with urllib.request.urlopen(rq, timeout=20) as r:
+            resp=json.loads(r.read().decode())
+    except Exception as e:
+        resp={"ok": False, "error": str(e)}
+    return {"ok": ok, "status_update": resp, "gates": gates}

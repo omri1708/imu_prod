@@ -1,5 +1,4 @@
-# server/canary_auto_api.py
-# Auto-Canary: create → loop (probe+evaluate+step/promote/rollback) → stop/status
+# server/canary_auto_api.py (UPDATED)
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -10,6 +9,8 @@ from server.canary_controller import deploy as canary_deploy, step as canary_ste
 from server.stream_wfq import BROKER
 from policy.rbac import require_perm
 from .canary_auto_policy import AutoCanaryPolicy
+from .k8s_ready import readiness_ratio, have_kubectl
+from .prometheus_client import query_instant, query_range, extract_last_vector, quantile_from_range
 
 router = APIRouter(prefix="/auto_canary", tags=["auto-canary"])
 
@@ -27,7 +28,12 @@ class StartReq(BaseModel):
     image: str
     total_replicas: int = Field(10, ge=1)
     canary_percent: int = Field(10, ge=0, le=100)
-    probe_url: str = Field(..., min_length=5)     # e.g. http://svc/health
+    # מקור מדידה:
+    probe_url: Optional[str] = None          # אם קיים – יבצע HTTP probes
+    prom_url: Optional[str] = None           # אם קיים – ישתמש ב-Prometheus
+    q_error_rate: Optional[str] = None       # למשל rate(http_requests_total{status=~"5.."}[3m]) / rate(http_requests_total[3m])
+    q_latency_ms: Optional[str] = None       # למשל histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[3m])) by (le))
+    prom_window_s: int = 180
     policy: AutoCanaryPolicy = AutoCanaryPolicy()
     dry: bool = False
 
@@ -41,6 +47,7 @@ class Status(BaseModel):
     steps: int
     last_error_rate: float
     last_p95_ms: float
+    last_ready_ratio: float
     started_ts: float
     stopped_ts: Optional[float] = None
 
@@ -48,7 +55,7 @@ _RUNS: Dict[str, Status] = {}
 _THREADS: Dict[str, threading.Thread] = {}
 _STOP: Dict[str, bool] = {}
 
-def _probe(url: str, sample: int = 20, timeout: float = 2.0) -> Dict[str,Any]:
+def _http_probe(url: str, sample: int = 20, timeout: float = 2.0) -> Dict[str,Any]:
     errs=0; times=[]
     for _ in range(sample):
         t0=time.time()
@@ -64,46 +71,64 @@ def _probe(url: str, sample: int = 20, timeout: float = 2.0) -> Dict[str,Any]:
     p95=times[int(0.95*(len(times)-1))] if times else 0.0
     return {"error_rate": errs/float(sample), "p95_ms": p95}
 
+def _prom_eval(prom_url: str, q_err: str, q_lat: str, window_s: int) -> Dict[str,Any]:
+    now=time.time()
+    er = extract_last_vector(query_instant(prom_url, q_err, ts=now)) if q_err else None
+    lat=None
+    if q_lat:
+        rng = query_range(prom_url, q_lat, start=now-window_s, end=now, step=max(5, window_s//30))
+        v = quantile_from_range(rng, 0.95)
+        lat = v*1000.0 if v is not None else None  # שניות→מילישניות
+    return {"error_rate": float(er) if er is not None else 0.0, "p95_ms": float(lat) if lat is not None else 0.0}
+
 def _loop(run_id: str, req: StartReq):
     pol = req.policy
-    st = Status(run_id=run_id, state="starting", ok_cycles=0, steps=0, last_error_rate=1.0, last_p95_ms=9999.0, started_ts=time.time())
+    st = Status(run_id=run_id, state="starting", ok_cycles=0, steps=0,
+                last_error_rate=1.0, last_p95_ms=9999.0, last_ready_ratio=0.0, started_ts=time.time())
     _RUNS[run_id]=st
     try:
-        # 1) initial deploy
+        # initial deploy
         _emit(f"auto_canary[{run_id}] deploy baseline/canary {req.total_replicas}/{req.canary_percent}%", pct=5)
         dres = canary_deploy(req) if not req.dry else {"ok": True}
         if not dres.get("ok"):
             st.state="failed"; _emit(f"auto_canary[{run_id}] deploy failed", priority=2); return
         st.state="running"; _RUNS[run_id]=st
 
-        # 2) loop
+        # loop
         while not _STOP.get(run_id):
-            # probe
-            measures=_probe(req.probe_url)
-            st.last_error_rate=measures["error_rate"]; st.last_p95_ms=measures["p95_ms"]; _RUNS[run_id]=st
-            _emit(f"probe err={st.last_error_rate:.3f} p95={st.last_p95_ms:.0f}ms")
+            # readiness from k8s (if kubectl available)
+            rr = readiness_ratio(req.namespace, req.app) if have_kubectl() else {"ratio": 1.0}
+            st.last_ready_ratio=float(rr.get("ratio",0.0))
+            # measures: prometheus or http probe
+            if req.prom_url and (req.q_error_rate or req.q_latency_ms):
+                m = _prom_eval(req.prom_url, req.q_error_rate, req.q_latency_ms, req.prom_window_s)
+            elif req.probe_url:
+                m = _http_probe(req.probe_url)
+            else:
+                m = {"error_rate":0.0,"p95_ms":0.0}
+            st.last_error_rate=m["error_rate"]; st.last_p95_ms=m["p95_ms"]; _RUNS[run_id]=st
+            _emit(f"probe err={st.last_error_rate:.3f} p95={st.last_p95_ms:.0f}ms ready={st.last_ready_ratio:.2f}")
 
-            ok = (st.last_error_rate <= pol.max_error_rate) and (st.last_p95_ms <= pol.max_p95_ms)
+            ok = (st.last_error_rate <= pol.max_error_rate) and \
+                 (st.last_p95_ms <= pol.max_p95_ms) and \
+                 (st.last_ready_ratio >= pol.min_ready_ratio)
             if ok:
                 st.ok_cycles += 1
                 _emit(f"OK cycle {st.ok_cycles}/{pol.consecutive_ok_for_promote}")
-                # promote?
                 if st.ok_cycles >= pol.consecutive_ok_for_promote:
-                    p = canary_promote({"user_id":req.user_id,"namespace":req.namespace,"app":req.app,"total_replicas":req.total_replicas,"dry":req.dry}) if not req.dry else {"ok":True}
+                    canary_promote({"user_id":req.user_id,"namespace":req.namespace,"app":req.app,"total_replicas":req.total_replicas,"dry":req.dry})
                     st.state="promoted"; _emit("promoted", pct=100, priority=3); break
-                # step forward if steps cap not reached
                 if st.steps < pol.max_steps:
                     st.steps += 1
                     canary_step({"user_id":req.user_id,"namespace":req.namespace,"app":req.app,"add_percent":pol.step_percent,"total_replicas":req.total_replicas,"dry":req.dry})
             else:
-                # violation → rollback
-                _emit(f"violation: err={st.last_error_rate:.3f} p95={st.last_p95_ms:.0f}ms", priority=2)
+                _emit(f"violation: err={st.last_error_rate:.3f} p95={st.last_p95_ms:.0f}ms ready={st.last_ready_ratio:.2f}", priority=2)
                 st.state="violated"
                 if pol.rollback_on_first_violation:
                     canary_rollback({"user_id":req.user_id,"namespace":req.namespace,"app":req.app,"total_replicas":req.total_replicas,"dry":req.dry})
                     st.state="rolled_back"; _emit("rolled_back", priority=2); break
                 st.ok_cycles = 0
-            # sleep and continue
+            # sleep
             for _ in range(pol.hold_seconds):
                 if _STOP.get(run_id): break
                 time.sleep(1.0)
@@ -112,24 +137,3 @@ def _loop(run_id: str, req: StartReq):
         st.state=f"error:{e}"
     finally:
         st.stopped_ts=time.time(); _RUNS[run_id]=st; _STOP.pop(run_id, None)
-
-@router.post("/start")
-def start(req: StartReq):
-    require_perm(req.user_id, "canary:auto:start")
-    run_id=f"auto-{int(time.time())}"
-    if _THREADS.get(run_id): raise HTTPException(409, "run_id exists")
-    _STOP[run_id]=False
-    t=threading.Thread(target=_loop, args=(run_id, req), daemon=True)
-    _THREADS[run_id]=t; t.start()
-    _emit(f"auto_canary[{run_id}] started", pct=1)
-    return {"ok": True, "run_id": run_id}
-
-@router.post("/stop")
-def stop(req: StopReq):
-    _STOP[req.run_id]=True
-    return {"ok": True}
-
-@router.get("/status")
-def status(run_id: Optional[str] = None):
-    if run_id: return {"ok": True, "status": _RUNS.get(run_id)}
-    return {"ok": True, "runs": list(_RUNS.values())}
