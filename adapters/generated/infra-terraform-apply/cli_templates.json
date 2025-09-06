@@ -1,0 +1,6 @@
+{
+  "kind": "infra.terraform.apply",
+  "templates": {
+    "any": "terraform -chdir={dir} apply{varfile_opt}{var_opt}{backend_opt}{approve_opt}"
+  }
+}

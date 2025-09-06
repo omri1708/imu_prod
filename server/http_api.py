@@ -46,12 +46,21 @@ from server.stream_policy_router import start_policy_router
 from server.synth_adapter_api import router as synth_router
 from adapters.synth.registry import get_template as dyn_get_template, find_contract as dyn_find_contract
 from adapters.validate import validate_params
+from adapters.synth.registry import reload_registry as _synth_reload
+from server.synth_presets_api import router as synth_presets_router
+from server.k8s_template_synth_api import router as k8s_synth_router
+
+
+
+_synth_reload()
 
 APP.include_router(scheduler_router)
 
 scheduler_boot()
 start_policy_router()
 
+APP.include_router(k8s_synth_router)
+APP.include_router(synth_presets_router)
 APP.include_router(synth_router)
 APP.include_router(jobs_metrics_router)
 APP.include_router(gh_status_router)

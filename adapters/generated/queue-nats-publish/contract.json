@@ -1,0 +1,14 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"NATS Publish",
+  "type":"object",
+  "required":["server","subject","message"],
+  "properties":{
+    "server":{"type":"string","minLength":3},
+    "subject":{"type":"string","minLength":1},
+    "message":{"type":"string","minLength":1},
+    "creds_opt":{"type":"string","default":""},
+    "tls_opt":{"type":"string","default":""}
+  },
+  "additionalProperties": false
+}

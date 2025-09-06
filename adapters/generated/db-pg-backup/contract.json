@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PostgreSQL Backup (pg_dump)",
+  "type": "object",
+  "required": ["db_url", "out"],
+  "properties": {
+    "db_url":   { "type": "string", "minLength": 8, "pattern": "^postgres(ql)?://.*$" },
+    "out":      { "type": "string", "minLength": 1 },
+    "format":   { "type": "string", "enum": ["p", "c", "t", "d"], "default": "p" },
+    "jobs":     { "type": "integer", "minimum": 1, "default": 1 },
+    "no_owner": { "type": "boolean", "default": false },
+    "schema":   { "type": "string" }
+  },
+  "additionalProperties": false
+}
