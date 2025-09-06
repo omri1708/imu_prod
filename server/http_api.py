@@ -27,7 +27,11 @@ from server.runbook_api import router as runbook_router
 from server.key_admin_api import router as key_admin_router
 from server.archive_api import router as archive_router
 from server.bundles_api import router as bundles_router
+from server.unified_archive_api import router as unified_router
+from server.replay_api import router as replay_router
 
+APP.include_router(replay_router)
+APP.include_router(unified_router)
 APP.include_router(bundles_router)
 APP.include_router(archive_router)
 APP.include_router(key_admin_router)
