@@ -1,165 +1,164 @@
-# imu_repo/policy/policy_engine.py
+# policy/policy_engine.py
+# -*- coding: utf-8 -*-
+"""
+Policy engine: per-user subspace policies (TTL/Trust/p95/Net/FS caps)
+Hard enforcement via decorators and explicit checks.
+"""
 from __future__ import annotations
-from typing import Dict, Any
-import time
+import time, ipaddress, os, re, threading
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Literal
-import time, json, hashlib
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-DEFAULT_POLICY = {
-    # רמות סיכון ומדיניות ברירת־מחדל
-    # משמעות: ככל שסיכון גבוה יותר → ספי אמון גבוהים יותר, TTL קצר יותר, ודורש מקורות מגוונים.
-    "risk_levels": {
-        "low":    {"min_trust": 0.65, "max_ttl_s": 7*24*3600,  "min_sources": 1, "freshness_decay": 0.10},
-        "medium": {"min_trust": 0.75, "max_ttl_s": 72*3600,    "min_sources": 2, "freshness_decay": 0.15},
-        "high":   {"min_trust": 0.85, "max_ttl_s": 24*3600,    "min_sources": 3, "freshness_decay": 0.20},
-        "prod":   {"min_trust": 0.90, "max_ttl_s": 6*3600,     "min_sources": 3, "freshness_decay": 0.25},
-    },
-    # התאמות פר־דומיין (יכול להיות UI/Realtime/Data/Model וכו')
-    "domain_overrides": {
-        "ui_public": {"risk": "medium"},
-        "ui_admin":  {"risk": "high"},
-        "payments":  {"risk": "prod"},
-        "realtime":  {"risk": "high"},
-        "default":   {"risk": "medium"},
-    }
-}
+class PolicyViolation(Exception): pass
+class RateLimited(Exception): pass
 
+TRUST_LEVELS = ("low","medium","high","system")
 
-Trust = Literal["unknown","low","medium","high","pinned"]
-Decision = Literal["allow","block","require_consent"]
+@dataclass
+class Limits:
+    cpu_ms_budget: int = 5_000            # wall-clock budget per op
+    mem_mb_budget: int = 512              # soft cap; enforce by accounting hooks
+    io_read_mb: int = 50
+    io_write_mb: int = 50
+    net_out_mb: int = 25
+    p95_ms_max: int = 800                 # perf SLO per op type
+    ttl_seconds: int = 7*24*3600
 
+@dataclass
+class NetRule:
+    allow: bool
+    cidr: Optional[str] = None
+    host_regex: Optional[str] = None
+    ports: Optional[Set[int]] = None
 
+@dataclass
+class FsRule:
+    allow: bool
+    path_regex: str
 
-class PolicyViolation(Exception):
-    pass
-
-class TrustLevel:
-    # 0=לא אמין, 1=נמוך, 2=בינוני, 3=גבוה, 4=מוסמך
-    def __init__(self, level:int):
-        assert 0 <= level <= 4
-        self.level = level
-    def __int__(self): return self.level
-    def __repr__(self): return f"TrustLevel({self.level})"
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
-
+@dataclass
 class UserPolicy:
-    """
-    מדיניות קשיחה פר-משתמש:
-     - ttl_ms: חיי נתון/ראייה (פג-תוקף)
-     - min_trust: רמת אמון מינימלית למקור
-     - max_p95_ms: סף p95 לביצועים (Pipeline יבדוק)
-     - require_evidence: השבה מותרת רק אם יש Claims+Evidence מאומתת
-     - sandbox_caps: אילו יכולות מותרות (רשימת מזהים)
-    """
-    def __init__(self, user_id:str, ttl_ms:int, min_trust:int,
-                 max_p95_ms:int, require_evidence:bool, sandbox_caps:Tuple[str,...]):
-        self.user_id = user_id
-        self.ttl_ms = ttl_ms
-        self.min_trust = TrustLevel(min_trust)
-        self.max_p95_ms = max_p95_ms
-        self.require_evidence = require_evidence
-        self.sandbox_caps = set(sandbox_caps)
+    user_id: str
+    trust: str = "medium"
+    limits: Limits = field(default_factory=Limits)
+    net_rules: List[NetRule] = field(default_factory=list)
+    fs_rules: List[FsRule] = field(default_factory=list)
+    priority: int = 100  # smaller = higher priority in queues
 
-    def allow_cap(self, cap_id:str):
-        return cap_id in self.sandbox_caps
-
-    def to_dict(self) -> Dict[str,Any]:
-        return {
-            "user_id": self.user_id, "ttl_ms": self.ttl_ms,
-            "min_trust": int(self.min_trust),
-            "max_p95_ms": self.max_p95_ms,
-            "require_evidence": self.require_evidence,
-            "sandbox_caps": sorted(self.sandbox_caps)
-        }
+    def check_trust(self):
+        if self.trust not in TRUST_LEVELS:
+            raise PolicyViolation(f"unknown trust level {self.trust}")
 
 class PolicyStore:
-    """אחסון מדיניות בזיכרון (אפשר להחליף ל-DB)."""
-    def __init__(self):
-        self._by_user: Dict[str,UserPolicy] = {}
+    """In-memory + on-disk json store (atomic replace)."""
+    def __init__(self, path: str = ".imu/policies.json"):
+        self.path = path
+        self._mux = threading.Lock()
+        self._cache: Dict[str,UserPolicy] = {}
 
-    def set_policy(self, p:UserPolicy):
-        self._by_user[p.user_id] = p
-
-    def get(self, user_id:str) -> Optional[UserPolicy]:
-        return self._by_user.get(user_id)
-
-    def snapshot_hash(self) -> str:
-        blob = json.dumps({u:p.to_dict() for u,p in sorted(self._by_user.items())}, sort_keys=True).encode()
-        return hashlib.sha256(blob).hexdigest()
-
-
-@dataclass
-class PolicyRule:
-    name: str
-    topic: str                      # e.g. "adapter.unity.run" / "net.ws.publish"
-    action: str                     # e.g. "invoke" / "read" / "write"
-    decision: Decision             # allow | block | require_consent
-    ttl_sec: Optional[int] = None   # per-user TTL for cached grants
-    min_trust: Trust = "unknown"    # minimal provenance trust required
-    max_rate_per_min: Optional[int] = None  # throttling
-    priority: int = 100             # lower = higher priority
-
-@dataclass
-class CachedGrant:
-    granted_at: float
-    ttl_sec: int
-
-@dataclass
-class UserSubspacePolicy:
-    user_id: str
-    rules: List[PolicyRule] = field(default_factory=list)
-    grants: Dict[str, CachedGrant] = field(default_factory=dict)  # key = topic:action
-
-    def decide(self, topic: str, action: str, trust: Trust, rate_counter_per_min: int) -> Decision:
-        now = time.time()
-        key = f"{topic}:{action}"
-        # TTL grant reuse
-        if key in self.grants:
-            g = self.grants[key]
-            if now - g.granted_at <= g.ttl_sec:
-                return "allow"
+    def load(self):
+        import json, os
+        with self._mux:
+            if os.path.exists(self.path):
+                obj = json.load(open(self.path, "r", encoding="utf-8"))
+                self._cache.clear()
+                for uid, rec in obj.items():
+                    limits = Limits(**rec["limits"])
+                    net = [NetRule(**n) for n in rec.get("net_rules",[])]
+                    fs = [FsRule(**f) for f in rec.get("fs_rules",[])]
+                    self._cache[uid] = UserPolicy(user_id=uid, trust=rec["trust"],
+                                                  limits=limits, net_rules=net, fs_rules=fs,
+                                                  priority=rec.get("priority",100))
             else:
-                self.grants.pop(key, None)
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                self._persist()
 
-        matched = sorted(
-            [r for r in self.rules if r.topic==topic and r.action==action],
-            key=lambda r: r.priority
-        )
-        if not matched:
-            return "require_consent"
+    def _persist(self):
+        import json, tempfile, os, shutil
+        tmp = self.path + ".tmp"
+        obj = {}
+        for uid, p in self._cache.items():
+            obj[uid] = {
+                "trust": p.trust,
+                "limits": p.limits.__dict__,
+                "net_rules": [nr.__dict__ for nr in p.net_rules],
+                "fs_rules": [fr.__dict__ for fr in p.fs_rules],
+                "priority": p.priority
+            }
+        with open(tmp,"w",encoding="utf-8") as f:
+            json.dump(obj,f,ensure_ascii=False,indent=2)
+        shutil.move(tmp, self.path)
 
-        rule = matched[0]
-        # trust gate
-        order = ["unknown","low","medium","high","pinned"]
-        if order.index(trust) < order.index(rule.min_trust):
-            return "require_consent"
+    def get(self, user_id: str) -> UserPolicy:
+        with self._mux:
+            p = self._cache.get(user_id)
+            if not p:
+                p = UserPolicy(user_id=user_id)
+                self._cache[user_id]=p
+                self._persist()
+            return p
 
-        # rate limiting
-        if rule.max_rate_per_min is not None and rate_counter_per_min > rule.max_rate_per_min:
-            return "block"
+    def put(self, p: UserPolicy):
+        with self._mux:
+            p.check_trust()
+            self._cache[p.user_id] = p
+            self._persist()
 
-        if rule.decision == "allow":
-            if rule.ttl_sec:
-                self.grants[key] = CachedGrant(granted_at=now, ttl_sec=rule.ttl_sec)
-            return "allow"
+policy_store = PolicyStore()
 
-        return rule.decision
+# ---------- Enforcement helpers ----------
 
-    def grant_once(self, topic: str, action: str, ttl_sec: int):
-        self.grants[f"{topic}:{action}"] = CachedGrant(time.time(), ttl_sec)
+def enforce_net(user: UserPolicy, host: str, port: int):
+    # allow by explicit allow rule; deny by default
+    for r in user.net_rules:
+        if r.allow:
+            ok_host = True
+            if r.host_regex and not re.search(r.host_regex, host, re.I):
+                ok_host = False
+            if r.cidr:
+                try:
+                    ipaddress.ip_network(r.cidr)
+                    # don't DNS here; treat host as ip string if looks like ip
+                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", host):
+                        if ipaddress.ip_address(host) not in ipaddress.ip_network(r.cidr):
+                            ok_host = False
+                    # if hostname & cidr specified, we allow hostname (policy owner guarantees mapping)
+                except Exception:
+                    raise PolicyViolation("bad cidr in policy")
+            if r.ports and port not in r.ports:
+                ok_host = False
+            if ok_host:
+                return
+    raise PolicyViolation(f"net denied: {host}:{port}")
 
-class PolicyEngine:
-    def __init__(self, policy: Dict[str,Any] | None = None):
-        self.policy = policy or DEFAULT_POLICY
+def enforce_fs(user: UserPolicy, path: str, is_write: bool):
+    allowed = False
+    for r in user.fs_rules:
+        if re.search(r.path_regex, path):
+            allowed = r.allow
+    if not allowed:
+        raise PolicyViolation(f"fs denied: {'write' if is_write else 'read'} {path}")
 
-    def resolve(self, domain: str | None, risk_hint: str | None) -> Dict[str,Any]:
-        rl = self.policy["risk_levels"]
-        if risk_hint and risk_hint in rl:
-            return {"risk": risk_hint, **rl[risk_hint]}
-        dom = self.policy["domain_overrides"].get(domain or "default", {"risk": "medium"})
-        r = dom.get("risk", "medium")
-        return {"risk": r, **rl.get(r, rl["medium"])}
+class Budget:
+    def __init__(self, limits: Limits):
+        self.limits = limits
+        self.start = time.time()
+        self.io_r = 0
+        self.io_w = 0
+        self.net_o = 0
+
+    def tick_cpu(self):
+        if (time.time()-self.start)*1000 > self.limits.cpu_ms_budget:
+            raise PolicyViolation("cpu budget exceeded")
+
+    def add_read(self, mb):
+        self.io_r += mb
+        if self.io_r > self.limits.io_read_mb: raise PolicyViolation("read budget exceeded")
+
+    def add_write(self, mb):
+        self.io_w += mb
+        if self.io_w > self.limits.io_write_mb: raise PolicyViolation("write budget exceeded")
+
+    def add_net_out(self, mb):
+        self.net_o += mb
+        if self.net_o > self.limits.net_out_mb: raise PolicyViolation("net out budget exceeded")

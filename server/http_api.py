@@ -1,5 +1,11 @@
 # server/http_api.py
-
+from __future__ import annotations
+from fastapi import FastAPI, HTTPException, Body
+from pydantic import BaseModel
+from typing import List, Optional
+from policy.policy_engine import policy_store, UserPolicy, Limits, NetRule, FsRule, PolicyViolation
+from adapters import android, ios, unity, cuda, k8s
+from provenance.signing import gen_keypair, cas_put_file, Evidence
 from wsgiref.simple_server import make_server
 from urllib.parse import parse_qs
 import json, os, mimetypes
@@ -163,6 +169,73 @@ def app(env, start):
     except FileNotFoundError:
         start("404 NOT FOUND", [('Content-Type','text/plain')])
         return [b'not found']
+
+
+
+app = FastAPI()
+
+class PolicyIn(BaseModel):
+    user_id: str
+    trust: str = "medium"
+    ttl_seconds: int = Limits().ttl_seconds
+    p95_ms_max: int = Limits().p95_ms_max
+    net_allow: List[str] = []     # host regex allowed (simple form)
+    fs_allow: List[str] = []      # regex paths
+
+@app.post("/policy/put")
+def policy_put(p: PolicyIn):
+    u = policy_store.get(p.user_id)
+    u.trust = p.trust
+    u.limits.p95_ms_max = p.p95_ms_max
+    u.limits.ttl_seconds = p.ttl_seconds
+    u.net_rules = [NetRule(allow=True, host_regex=rgx) for rgx in p.net_allow]
+    u.fs_rules = [FsRule(allow=True, path_regex=rgx) for rgx in p.fs_allow]
+    policy_store.put(u)
+    return {"ok":True}
+
+@app.post("/provenance/keygen/{name}")
+def keygen(name:str):
+    return gen_keypair(name)
+
+class EvidenceIn(BaseModel):
+    path: str
+    kind: str = "file"
+    trust: str = "high"
+    signer: Optional[str] = "default"
+
+@app.post("/provenance/ingest")
+def prov_ingest(ev: EvidenceIn):
+    h = cas_put_file(ev.path)
+    e = Evidence(hash=h, kind=ev.kind, trust=ev.trust)
+    e.sign(ev.signer or "default")
+    return {"hash":h,"evidence":e.__dict__}
+
+class CapReq(BaseModel):
+    capability: str
+    args: dict = {}
+
+@app.post("/capabilities/request")
+def cap_request(req: CapReq):
+    # “ask-and-continue”: try to install or fail loudly with actionable error
+    cap = req.capability.lower()
+    try:
+        if cap=="android-dry-run":
+            ok, why = android.dry_run(req.args.get("project_dir","."))
+            return {"ok":ok,"why":why}
+        if cap=="ios-dry-run":
+            ok, why = ios.dry_run(req.args.get("xcodeproj_path","app.xcodeproj"))
+            return {"ok":ok,"why":why}
+        if cap=="unity-dry-run":
+            ok, why = unity.dry_run(req.args.get("project_path","."))
+            return {"ok":ok,"why":why}
+        if cap=="cuda-dry-run":
+            ok, why = cuda.dry_run()
+            return {"ok":ok,"why":why}
+        if cap=="k8s-dry-run":
+            return {"ok":k8s.dry_run()}
+        raise HTTPException(status_code=400, detail="unknown capability")
+    except PolicyViolation as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 if __name__ == "__main__":

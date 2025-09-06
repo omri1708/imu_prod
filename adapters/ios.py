@@ -1,116 +1,29 @@
 # adapters/ios.py
 # -*- coding: utf-8 -*-
-import os, shutil, subprocess
-from typing import Dict, Any
-from common.exc import ResourceRequired
-from adapters.base import BuildAdapter, BuildResult
-from adapters.provenance_store import cas_put, evidence_for, register_evidence
+import os, subprocess, shutil
+from typing import Tuple, List
+from policy.policy_engine import PolicyViolation
 
-from adapters.base import _need, run, put_artifact_text, evidence_from_text
-from engine.adapter_types import AdapterResult
-from storage.provenance import record_provenance
-from .contracts import AdapterResult, require
-
-from adapters.base import AdapterBase, PlanResult
-from engine.policy import RequestContext
-import shlex, subprocess
-from typing import Dict, Any, List, Tuple
-from engine.provenance import Evidence
-from engine.policy import UserSpacePolicy
-import os, subprocess, shlex
-from typing import Dict, Any
-from runtime.sandbox import enforce_file_access, PolicyViolation
-from policy.model import UserPolicy
-
-def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> AdapterResult:
+def dry_run(xcodeproj_path:str)->Tuple[bool,List[str]]:
+    missing=[]
     if not shutil.which("xcodebuild"):
-        return require("Xcode", "Xcode Command Line Tools / Xcode.app required",
-                       ["xcode-select --install"])
-    try:
-        subprocess.run(["xcodebuild", "-scheme", scheme, "-sdk", sdk, "build"],
-                       cwd=project_dir, check=True)
-        return AdapterResult(status="ok", message="iOS build complete", outputs={"xcbuild": "ok"})
-    except subprocess.CalledProcessError as e:
-        return AdapterResult(status="error", message=f"xcodebuild failed: {e}", outputs={})
-    
+        missing.append("Xcode not found (requires macOS)")
+    if not os.path.exists(xcodeproj_path):
+        missing.append("xcodeproj not found")
+    return (len(missing)==0, missing)
 
-def build_ios_xcodeproj(project_path:str, scheme:str, sdk:str="iphoneos") -> AdapterResult:
-    if not os.path.exists(project_path):
-        return AdapterResult(False, "xcodeproj not found", {})
-    try:
-        out = subprocess.run([
-            "xcodebuild", "-project", project_path, "-scheme", scheme, "-sdk", sdk, "build"
-        ], capture_output=True, text=True, timeout=1800)
-        ok = (out.returncode == 0)
-        return AdapterResult(ok, out.stderr if not ok else "ok", {"log": out.stdout})
-    except Exception as e:
-        return AdapterResult(False, str(e), {})
-
-class IOSAdapter(AdapterBase, BuildAdapter):
-    KIND = "ios"
-    name = "ios"
-    
-    def build_command(self, args: Dict[str, Any], dry_run: bool, policy: UserSpacePolicy) -> List[str]:
-        workspace = args.get("workspace","MyApp.xcworkspace")
-        scheme = args.get("scheme","MyApp")
-        configuration = args.get("configuration","Release")
-        cmd = ["bash","-lc", f"xcodebuild -workspace {shlex.quote(workspace)} -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} build"]
-        return cmd
-
-    def execute(self, cmd: List[str], policy: UserSpacePolicy) -> Tuple[bool,str,str]:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            out, err = proc.communicate(timeout=policy.p95_ms/1000)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            return False, "", "timeout (p95 exceeded)"
-        return proc.returncode==0, out, err
-
-    def produce_evidence(self, cmd: List[str], args: Dict[str, Any]):
-        return [Evidence(claim="ios.build.plan", source="adapters.ios", trust=0.7, extra={"cmd":cmd,"args":args})]    
-
-    def plan(self, spec: Dict[str, Any], ctx: RequestContext) -> PlanResult:
-        scheme = spec.get("scheme","App")
-        cfg = spec.get("configuration","Debug")
-        sdk = spec.get("sdk","iphonesimulator")
-        cmds = [f"xcodebuild -scheme {scheme} -configuration {cfg} -sdk {sdk} build"]
-        return PlanResult(commands=cmds, env={}, notes="xcodebuild build")
-
-    def detect(self) -> bool:
-        return bool(shutil.which("xcodebuild"))
-
-    def requirements(self):
-        return (self.KIND, ["xcodebuild","Xcode/CLT"], "Install Xcode command line tools and accept licenses")
-
-    def build(self, job: Dict, user: str, workspace: str, policy, ev_index) -> AdapterResult:
-        _need("xcodebuild", "Install Xcode / Command Line Tools (macOS only).")
-        proj_dir = os.path.join(workspace, "ios_app")
-        os.makedirs(proj_dir, exist_ok=True)
-        # הדבקה מינימלית; פרויקט Xcode אמיתי דורש יצירה מלאה של scheme/targets
-        # כאן נריץ xcodebuild -showsdks לבדיקה
-        code,out,err = run(["xcodebuild","-showsdks"], cwd=proj_dir)
-        if code != 0:
-            raise RuntimeError(f"xcodebuild failed: {err}")
-        app_path = os.path.join(proj_dir, "build", "ios_app.app")
-        put_artifact_text(app_path, "demo-ios-app")
-        ev = [evidence_from_text("ios_sdks", out[-4000:])]
-        record_provenance(app_path, ev, trust=0.7)
-        claims = [{"kind":"ios_build","path":app_path,"user":user}]
-        return AdapterResult(artifacts={app_path:""}, claims=claims, evidence=ev)
-    
-
-def dry_run(project_dir: str, scheme: str, configuration: str="Release") -> Dict[str, Any]:
-    cmds = [
-        f"xcodebuild -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} -showBuildSettings",
-        f"xcodebuild -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} build"
-    ]
-    return {"ok": True, "cmds": cmds, "needs": ["Xcode", "codesign identities"]}
-
-def run(policy: UserPolicy, project_dir: str, scheme: str, configuration: str="Release") -> Dict[str, Any]:
-    enforce_file_access(policy, project_dir, write=False)
-    env = os.environ.copy()
-    p = subprocess.run(["xcodebuild","-scheme",scheme,"-configuration",configuration,"build"],
-                       cwd=project_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if p.returncode != 0:
-        return {"ok": False, "log": p.stdout}
-    return {"ok": True, "log": p.stdout}
+def build_ipa(xcodeproj_path:str, scheme:str, out_dir:str)->str:
+    ok, why = dry_run(xcodeproj_path)
+    if not ok: raise PolicyViolation("ios dry-run failed: " + "; ".join(why))
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = ["xcodebuild","-project",xcodeproj_path,"-scheme",scheme,"-configuration","Release","archive",
+           "-archivePath","build/app.xcarchive","CODE_SIGN_STYLE=Automatic"]
+    subprocess.run(cmd, check=True)
+    cmd = ["xcodebuild","-exportArchive","-archivePath","build/app.xcarchive",
+           "-exportOptionsPlist","ExportOptions.plist","-exportPath",out_dir]
+    subprocess.run(cmd, check=True)
+    # locate IPA
+    for f in os.listdir(out_dir):
+        if f.endswith(".ipa"):
+            return os.path.join(out_dir,f)
+    raise RuntimeError("ipa not found")
