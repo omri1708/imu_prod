@@ -1,6 +1,7 @@
 # server/helm_template_synth_api.py
 # Helm Chart generator: spec → chart under helm/generated/<slug>/ with Chart.yaml, values.yaml, templates/*.yaml
-# API: create/list/get/dry_template/upgrade (dry/run)
+# API: create/list/get/dry_template/upgrade   (מורחב: Ingress / ServiceMonitor / NetworkPolicy)
+
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -22,6 +23,28 @@ class ChartImage(BaseModel):
     tag: str = "latest"
     pullPolicy: str = "IfNotPresent"
 
+class IngressSpec(BaseModel):
+    enabled: bool = False
+    className: Optional[str] = None
+    host: Optional[str] = None
+    path: str = "/"
+    tlsSecret: Optional[str] = None
+    annotations: Dict[str,str] = {}
+
+class ServiceMonitorSpec(BaseModel):
+    enabled: bool = False
+    scrapePort: int = 80
+    interval: str = "30s"
+    path: str = "/metrics"
+    scheme: str = "http"
+    labels: Dict[str,str] = {}
+
+class NetworkPolicySpec(BaseModel):
+    enabled: bool = False
+    allowSameNamespace: bool = True
+    ingressCidrs: list[str] = []
+    egressCidrs: list[str] = []
+
 class ChartSpec(BaseModel):
     name: str
     version: str = "0.1.0"
@@ -38,6 +61,9 @@ class ChartSpec(BaseModel):
     hpaMin: int = 2
     hpaMax: int = 10
     hpaCpu: int = 80
+    ingress: IngressSpec = IngressSpec()
+    serviceMonitor: ServiceMonitorSpec = ServiceMonitorSpec()
+    networkPolicy: NetworkPolicySpec = NetworkPolicySpec()
 
 def chart_yaml(s:ChartSpec)->str:
     return f"""apiVersion: v2
@@ -53,6 +79,35 @@ def values_yaml(s:ChartSpec)->str:
     res = ""
     if s.resources:
         res = "  resources:\n    requests:\n" + "".join([f"      {k}: {v}\n" for k,v in s.resources.items()])
+    ingress = f"""
+ingress:
+  enabled: {str(s.ingress.enabled).lower()}
+  className: {s.ingress.className or 'null'}
+  host: {s.ingress.host or 'null'}
+  path: {s.ingress.path}
+  tlsSecret: {s.ingress.tlsSecret or 'null'}
+  annotations:
+{''.join([f'    {k}: \"{v}\"\n' for k,v in s.ingress.annotations.items()]) if s.ingress.annotations else '    {}'}
+"""
+    sm = f"""
+serviceMonitor:
+  enabled: {str(s.serviceMonitor.enabled).lower()}
+  scrapePort: {s.serviceMonitor.scrapePort}
+  interval: "{s.serviceMonitor.interval}"
+  path: "{s.serviceMonitor.path}"
+  scheme: "{s.serviceMonitor.scheme}"
+  labels:
+{''.join([f'    {k}: \"{v}\"\n' for k,v in s.serviceMonitor.labels.items()]) if s.serviceMonitor.labels else '    {}'}
+"""
+    np = f"""
+networkPolicy:
+  enabled: {str(s.networkPolicy.enabled).lower()}
+  allowSameNamespace: {str(s.networkPolicy.allowSameNamespace).lower()}
+  ingressCidrs:
+{''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.ingressCidrs]) if s.networkPolicy.ingressCidrs else '    []'}
+  egressCidrs:
+{''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.egressCidrs]) if s.networkPolicy.egressCidrs else '    []'}
+"""
     return f"""namespace: {s.namespace}
 replicaCount: {s.replicas}
 service:
@@ -65,102 +120,197 @@ image:
 container:
   port: {s.containerPort}
 {('env:\n'+env) if env else ''}
-{res}"""
+{res}
+hpa:
+  enabled: {str(s.hpa).lower()}
+  min: {s.hpaMin}
+  max: {s.hpaMax}
+  cpu: {s.hpaCpu}
+{ingress}
+{sm}
+{np}
+"""
 
-def tpl_deployment()->str:
-    return """apiVersion: apps/v1
+def tpl_helpers(name:str)->str:
+    return f"""{{{{- define "{name}.name" -}}}}
+{{{{ .Chart.Name }}}}
+{{{{- end -}}}}
+
+{{{{- define "{name}.fullname" -}}}}
+{{{{ include "{name}.name" . }}}}-{{{{ .Release.Name }}}}
+{{{{- end -}}}}
+"""
+
+def tpl_deployment(name:str)->str:
+    return f"""apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "%s.fullname" . }}
-  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{{{ include "{name}.fullname" . }}}}
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{{{ .Values.replicaCount }}}}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "%s.name" . }}
+      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "%s.name" . }}
+        app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
     spec:
       containers:
       - name: app
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+        image: "{{{{ .Values.image.repository }}}}:{{{{ .Values.image.tag }}}}"
+        imagePullPolicy: "{{{{ .Values.image.pullPolicy }}}}"
         ports:
-        - containerPort: {{ .Values.container.port }}
-{{- if .Values.env }}
+        - containerPort: {{{{ .Values.container.port }}}}
+{{{{- if .Values.env }}}}
         env:
-{{ toYaml .Values.env | indent 8 }}
-{{- end }}
-{{- if .Values.resources }}
-{{ toYaml .Values.resources | indent 8 }}
-{{- end }}
-""" % ("%s","%s","%s")
+{{{{ toYaml .Values.env | indent 8 }}}}
+{{{{- end }}}}
+{{{{- if .Values.resources }}}}
+{{{{ toYaml .Values.resources | indent 8 }}}}
+{{{{- end }}}}
+"""
 
-def tpl_service()->str:
-    return """apiVersion: v1
+def tpl_service(name:str)->str:
+    return f"""apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "%s.fullname" . }}-svc
-  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{{{ include "{name}.fullname" . }}}}-svc
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{{{ .Values.service.type }}}}
   selector:
-    app.kubernetes.io/name: {{ include "%s.name" . }}
+    app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
   ports:
-  - port: {{ .Values.service.port }}
-    targetPort: {{ .Values.container.port }}
-""" % ("%s","%s")
+  - port: {{{{ .Values.service.port }}}}
+    targetPort: {{{{ .Values.container.port }}}}
+"""
 
-def tpl_helpers()->str:
-    return """{{- define "%s.name" -}}
-%s
-{{- end -}}
-
-{{- define "%s.fullname" -}}
-{{ include "%s.name" . }}-{{ .Release.Name }}
-{{- end -}}
-""" % ("%s","{{ .Chart.Name }}","%s","%s")
-
-def tpl_hpa()->str:
-    return """apiVersion: autoscaling/v2
+def tpl_hpa(name:str)->str:
+    return f"""{{{{- if .Values.hpa.enabled }}}}
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "%s.fullname" . }}-hpa
-  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{{{ include "{name}.fullname" . }}}}-hpa
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "%s.fullname" . }}
-  minReplicas: {{ .Values.hpa.min }}
-  maxReplicas: {{ .Values.hpa.max }}
+    name: {{{{ include "{name}.fullname" . }}}}
+  minReplicas: {{{{ .Values.hpa.min }}}}
+  maxReplicas: {{{{ .Values.hpa.max }}}}
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: {{ .Values.hpa.cpu }}
-""" % ("%s","%s")
+        averageUtilization: {{{{ .Values.hpa.cpu }}}}
+{{{{- end }}}}
+"""
+
+def tpl_ingress(name:str)->str:
+    return f"""{{{{- if .Values.ingress.enabled }}}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{{{ include "{name}.fullname" . }}}}-ing
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+{{{{- if .Values.ingress.className }}}}
+  annotations:
+    kubernetes.io/ingress.class: "{{{{ .Values.ingress.className }}}}"
+{{{{- end }}}}
+spec:
+  rules:
+  - host: {{{{ .Values.ingress.host }}}}
+    http:
+      paths:
+      - path: {{{{ .Values.ingress.path }}}}
+        pathType: Prefix
+        backend:
+          service:
+            name: {{{{ include "{name}.fullname" . }}}}-svc
+            port:
+              number: {{{{ .Values.service.port }}}}
+{{{{- if .Values.ingress.tlsSecret }}}}
+  tls:
+  - hosts:
+    - {{{{ .Values.ingress.host }}}}
+    secretName: {{{{ .Values.ingress.tlsSecret }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+"""
+
+def tpl_service_monitor(name:str)->str:
+    return f"""{{{{- if .Values.serviceMonitor.enabled }}}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{{{ include "{name}.fullname" . }}}}-sm
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+  labels:
+{{{{ toYaml .Values.serviceMonitor.labels | indent 4 }}}}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
+  endpoints:
+  - port: http
+    targetPort: {{{{ .Values.service.port }}}}
+    interval: {{{{ .Values.serviceMonitor.interval }}}}
+    path: {{{{ .Values.serviceMonitor.path }}}}
+    scheme: {{{{ .Values.serviceMonitor.scheme }}}}
+{{{{- end }}}}
+"""
+
+def tpl_network_policy(name:str)->str:
+    return f"""{{{{- if .Values.networkPolicy.enabled }}}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ include "{name}.fullname" . }}}}-np
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - {{{{- if .Values.networkPolicy.allowSameNamespace }}}}
+    from:
+    - podSelector: {{}}
+    {{{{- end }}}}
+    {{{{- range .Values.networkPolicy.ingressCidrs }}}}
+    - ipBlock: {{ cidr: {{{{ . }}}} }}
+    {{{{- end }}}}
+  egress:
+  - {{{{- range .Values.networkPolicy.egressCidrs }}}}
+    to:
+    - ipBlock: {{ cidr: {{{{ . }}}} }}
+    {{{{- end }}}}
+{{{{- end }}}}
+"""
 
 @router.post("/create")
 def create(spec: ChartSpec):
     slug=_slug(spec.name)
     base=ROOT/slug; (base/"templates").mkdir(parents=True, exist_ok=True)
-    # files
     (base/"Chart.yaml").write_text(chart_yaml(spec), encoding="utf-8")
-    vals = values_yaml(spec)+("\nhpa:\n  min: %d\n  max: %d\n  cpu: %d\n" % (spec.hpaMin,spec.hpaMax,spec.hpaCpu) if spec.hpa else "")
-    (base/"values.yaml").write_text(vals, encoding="utf-8")
-    (base/"templates"/"_helpers.tpl").write_text(tpl_helpers().replace("%s", spec.name), encoding="utf-8")
-    (base/"templates"/"deployment.yaml").write_text(tpl_deployment().replace("%s", spec.name), encoding="utf-8")
-    (base/"templates"/"service.yaml").write_text(tpl_service().replace("%s", spec.name), encoding="utf-8")
-    if spec.hpa:
-        (base/"templates"/"hpa.yaml").write_text(tpl_hpa().replace("%s", spec.name), encoding="utf-8")
-    # minimal contract of values (exported for reference)
+    (base/"values.yaml").write_text(values_yaml(spec), encoding="utf-8")
+    (base/"templates"/"_helpers.tpl").write_text(tpl_helpers(spec.name), encoding="utf-8")
+    (base/"templates"/"deployment.yaml").write_text(tpl_deployment(spec.name), encoding="utf-8")
+    (base/"templates"/"service.yaml").write_text(tpl_service(spec.name), encoding="utf-8")
+    (base/"templates"/"hpa.yaml").write_text(tpl_hpa(spec.name), encoding="utf-8")
+    (base/"templates"/"ingress.yaml").write_text(tpl_ingress(spec.name), encoding="utf-8")
+    (base/"templates"/"servicemonitor.yaml").write_text(tpl_service_monitor(spec.name), encoding="utf-8")
+    (base/"templates"/"networkpolicy.yaml").write_text(tpl_network_policy(spec.name), encoding="utf-8")
+    # חוזה ערכים "קל" לעיון
     (base/"contract.json").write_text(json.dumps({"title":"Values","type":"object"}, indent=2), encoding="utf-8")
-    (base/"README.md").write_text(f"# {spec.name} (Helm chart)\n\nAuto-generated.\n", encoding="utf-8")
+    (base/"README.md").write_text(f"# {spec.name} (Helm chart, auto-generated)\n\nWith Ingress/ServiceMonitor/NetworkPolicy.\n", encoding="utf-8")
     return {"ok": True, "slug": slug, "dir": str(base), "release": spec.release, "namespace": spec.namespace}
 
 @router.get("/list")
@@ -187,3 +337,13 @@ def upgrade(slug: str, release: str, namespace: str = "default", values_file: Op
     body={"user_id":"demo-user","kind":"helm.upgrade","params":{"release":release,"chart_dir":str(base),"namespace":namespace,"values_file":vf,"extra_opt":""},"execute": execute}
     j=_http_call("POST","/adapters/run", body)
     return {"ok": bool(j.get("ok")),"reason": j.get("reason"),"cmd": j.get("cmd")}
+
+@router.get("/get")
+def get_template(slug: str):
+    base=ROOT/slug
+    if not base.exists(): raise HTTPException(404,"not found")
+    files={}
+    for n in ("Chart.yaml","values.yaml","templates/_helpers.tpl","templates/deployment.yaml","templates/service.yaml","templates/hpa.yaml","templates/ingress.yaml","templates/servicemonitor.yaml","templates/networkpolicy.yaml","contract.json","README.md"):
+        p=base/n
+        if p.exists(): files[str(n)] = p.read_text(encoding="utf-8")
+    return {"ok": True, "files": files}
