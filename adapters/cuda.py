@@ -87,3 +87,18 @@ extern "C" __global__ void axpy(float a, const float* x, float* y, int n){
         record_provenance(out_path, ev, trust=0.85)
         claims = [{"kind":"cuda_kernel","path":out_path,"user":user}]
         return AdapterResult(artifacts={out_path:""}, claims=claims, evidence=ev)
+    
+import os, subprocess, shlex
+from typing import Dict, Any, List
+from runtime.sandbox import enforce_file_access
+from policy.model import UserPolicy
+
+def dry_run(source: str, arch: str="sm_80") -> Dict[str, Any]:
+    cmds = [f"nvcc -arch={shlex.quote(arch)} -O3 -o kernel.out {shlex.quote(source)}"]
+    return {"ok": True, "cmds": cmds, "needs": ["CUDA nvcc", f"GPU with {arch}"]}
+
+def run(policy: UserPolicy, source: str, arch: str="sm_80") -> Dict[str, Any]:
+    enforce_file_access(policy, source, write=False)
+    p = subprocess.run(["nvcc", f"-arch={arch}", "-O3", "-o", "kernel.out", source],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return {"ok": p.returncode==0, "log": p.stdout, "artifact": "./kernel.out" if p.returncode==0 else None}

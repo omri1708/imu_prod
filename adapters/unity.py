@@ -18,7 +18,10 @@ import shlex, subprocess
 from typing import Dict, Any, List, Tuple
 from engine.provenance import Evidence
 from engine.policy import UserSpacePolicy
-
+import os, subprocess, json, shlex
+from typing import Dict, Any
+from runtime.sandbox import enforce_file_access
+from policy.model import UserPolicy
 
 def unity_batchmode(project_path:str, build_target:str="Android") -> AdapterResult:
     unity = _find_unity()
@@ -112,3 +115,18 @@ class UnityAdapter(AdapterBase, BuildAdapter):
             record_provenance(exe_path, ev, trust=0.7)
             claims = [{"kind":"unity_build","path":exe_path,"user":user}]
             return AdapterResult(artifacts={exe_path:""}, claims=claims, evidence=ev)
+    
+
+def dry_run(project_dir: str, target: str="StandaloneLinux64") -> Dict[str, Any]:
+    # CLI אחיד ל־Unity:
+    # Unity -quit -batchmode -nographics -projectPath <dir> -buildTarget <target> -executeMethod BuildScript.Build
+    cmds = [f"Unity -quit -batchmode -nographics -projectPath {shlex.quote(project_dir)} -buildTarget {shlex.quote(target)} -executeMethod BuildScript.Build"]
+    return {"ok": True, "cmds": cmds, "needs": ["Unity Editor + BuildSupport for target"]}
+
+
+def run(policy: UserPolicy, project_dir: str, target: str="StandaloneLinux64") -> Dict[str, Any]:
+    enforce_file_access(policy, project_dir, write=False)
+    env = os.environ.copy()
+    cmd = ["Unity","-quit","-batchmode","-nographics","-projectPath",project_dir,"-buildTarget",target,"-executeMethod","BuildScript.Build"]
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return {"ok": p.returncode==0, "log": p.stdout}

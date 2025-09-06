@@ -3,7 +3,10 @@
 import os, shutil, subprocess, shlex
 from typing import Dict, Any, List, Tuple
 
-
+import os, subprocess, shlex, json, time
+from typing import Dict, Any, List
+from runtime.sandbox import enforce_file_access, PolicyViolation
+from policy.model import UserPolicy
 from common.exc import ResourceRequired
 from adapters.base import BuildAdapter, BuildResult
 from adapters.provenance_store import cas_put, evidence_for, register_evidence
@@ -16,6 +19,7 @@ from engine.policy import RequestContext
 
 from engine.provenance import Evidence
 from engine.policy import UserSpacePolicy
+
 
 def build_android_gradle(project_dir:str) -> AdapterResult:
     gradlew = os.path.join(project_dir, "gradlew")
@@ -121,3 +125,49 @@ class AndroidAdapter(AdapterBase, BuildAdapter):
         record_provenance(jar_path, evidence, trust=0.7)
         claims = [{"kind":"android_build","path":jar_path,"user":user}]
         return AdapterResult(artifacts={jar_path: ""}, claims=claims, evidence=evidence)
+    
+
+#_______
+ANDROID_SDK_HINTS = {
+    "linux": ["cmdline-tools", "platform-tools", "build-tools;34.0.0", "platforms;android-34"],
+    "darwin": ["cmdline-tools", "platform-tools", "build-tools;34.0.0", "platforms;android-34"],
+    "windows": ["platform-tools","build-tools;34.0.0","platforms;android-34"],
+}
+
+def _find_sdk() -> str:
+    # ANDROID_HOME or ANDROID_SDK_ROOT
+    for k in ("ANDROID_SDK_ROOT","ANDROID_HOME"):
+        v = os.environ.get(k)
+        if v and os.path.isdir(v):
+            return v
+    raise FileNotFoundError("Android SDK not found (set ANDROID_SDK_ROOT)")
+
+def dry_run(project_dir: str, variant: str="release") -> Dict[str, Any]:
+    sdk = "${ANDROID_SDK_ROOT}"
+    gradlew = os.path.join(project_dir, "gradlew")
+    cmds = [
+        f"cd {shlex.quote(project_dir)} && {shlex.quote(gradlew)} assemble{variant.capitalize()}",
+        f"{sdk}/build-tools/34.0.0/apksigner verify app-{variant}.apk"
+    ]
+    return {"ok": True, "cmds": cmds, "needs": ["ANDROID_SDK_ROOT","Java JDK 17"]}
+
+def run(policy: UserPolicy, project_dir: str, variant: str="release") -> Dict[str, Any]:
+    enforce_file_access(policy, project_dir, write=False)
+    sdk = _find_sdk()
+    gradlew = os.path.join(project_dir, "gradlew")
+    if not os.path.exists(gradlew):
+        raise FileNotFoundError("gradlew missing in project")
+    env = os.environ.copy()
+    env["ANDROID_SDK_ROOT"] = sdk
+    p = subprocess.run([gradlew, f"assemble{variant.capitalize()}"], cwd=project_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    out = p.stdout
+    if p.returncode!=0:
+        return {"ok": False, "log": out}
+    apk_path = None
+    for root,_,files in os.walk(project_dir):
+        for f in files:
+            if f.endswith(".apk"):
+                apk_path=os.path.join(root,f)
+    if not apk_path:
+        return {"ok": False, "error": "APK not found"}
+    return {"ok": True, "artifact": apk_path, "log": out}

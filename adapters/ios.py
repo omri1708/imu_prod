@@ -17,7 +17,10 @@ import shlex, subprocess
 from typing import Dict, Any, List, Tuple
 from engine.provenance import Evidence
 from engine.policy import UserSpacePolicy
-
+import os, subprocess, shlex
+from typing import Dict, Any
+from runtime.sandbox import enforce_file_access, PolicyViolation
+from policy.model import UserPolicy
 
 def run_ios_build(project_dir: str, scheme: str, sdk: str="iphoneos") -> AdapterResult:
     if not shutil.which("xcodebuild"):
@@ -94,3 +97,20 @@ class IOSAdapter(AdapterBase, BuildAdapter):
         record_provenance(app_path, ev, trust=0.7)
         claims = [{"kind":"ios_build","path":app_path,"user":user}]
         return AdapterResult(artifacts={app_path:""}, claims=claims, evidence=ev)
+    
+
+def dry_run(project_dir: str, scheme: str, configuration: str="Release") -> Dict[str, Any]:
+    cmds = [
+        f"xcodebuild -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} -showBuildSettings",
+        f"xcodebuild -scheme {shlex.quote(scheme)} -configuration {shlex.quote(configuration)} build"
+    ]
+    return {"ok": True, "cmds": cmds, "needs": ["Xcode", "codesign identities"]}
+
+def run(policy: UserPolicy, project_dir: str, scheme: str, configuration: str="Release") -> Dict[str, Any]:
+    enforce_file_access(policy, project_dir, write=False)
+    env = os.environ.copy()
+    p = subprocess.run(["xcodebuild","-scheme",scheme,"-configuration",configuration,"build"],
+                       cwd=project_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if p.returncode != 0:
+        return {"ok": False, "log": p.stdout}
+    return {"ok": True, "log": p.stdout}

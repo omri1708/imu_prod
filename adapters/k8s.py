@@ -13,7 +13,10 @@ import subprocess, shlex, tempfile, os
 from typing import Dict, Any, List, Tuple
 from engine.provenance import Evidence
 from engine.policy import UserSpacePolicy
-
+import subprocess, json, shlex, os
+from typing import Dict, Any, Optional
+from runtime.sandbox import enforce_file_access
+from policy.model import UserPolicy
 
 
 def deploy_manifest(yaml_path:str, namespace:str="default") -> AdapterResult:
@@ -123,3 +126,29 @@ spec:
         if code != 0:
             raise RuntimeError(f"kubectl apply failed: {err}")
         return True
+    
+
+def dry_run(image: str, namespace: str="default") -> Dict[str, Any]:
+    spec = {
+        "apiVersion":"batch/v1",
+        "kind":"Job",
+        "metadata":{"name":"imu-job-dryrun","namespace":namespace},
+        "spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"job","image":image,"args":["echo","hello"]}]}}}
+    }
+    cmds = [
+        "kubectl version --client",
+        f"kubectl apply --dry-run=client -f - <<<'{json.dumps(spec)}'",
+    ]
+    return {"ok": True, "cmds": cmds, "needs": ["kubectl context", "RBAC to create Jobs"]}
+
+def run(policy: UserPolicy, image: str, args=None, namespace: str="default") -> Dict[str, Any]:
+    if args is None: args=[]
+    manifest = {
+        "apiVersion":"batch/v1",
+        "kind":"Job",
+        "metadata":{"name":"imu-job","namespace":namespace},
+        "spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"job","image":image,"args":args}]}}}
+    }
+    p = subprocess.run(["kubectl","apply","-f","-"], input=json.dumps(manifest),
+                       text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return {"ok": p.returncode==0, "log": p.stdout}
