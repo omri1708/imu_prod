@@ -1,24 +1,162 @@
 # policy/policy_rules.py
 from __future__ import annotations
-import time
+import time, re, fnmatch, threading
 import hashlib
-from dataclasses import dataclass
-from typing import Dict, Optional, Literal, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Literal, Tuple, List
+
 
 TrustLevel = Literal["low", "medium", "high", "system"]
+TRUST_LEVELS = ("guest", "basic", "trusted", "high_trust", "rootlike")
 
-@dataclass(frozen=True)
+@dataclass
+class RateLimit:
+    capacity: int
+    refill_per_sec: float
+    _tokens: float = field(default=0.0)
+    _last: float = field(default_factory=time.time)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def allow(self, amount: int = 1) -> bool:
+        now = time.time()
+        with self._lock:
+            self._tokens = min(self.capacity, self._tokens + (now - self._last) * self.refill_per_sec)
+            self._last = now
+            if self._tokens >= amount:
+                self._tokens -= amount
+                return True
+            return False
+
+@dataclass
 class UserPolicy:
     user_id: str
-    trust_level: TrustLevel
-    ttl_seconds: int
-    require_evidence: bool
-    require_strong_sources: bool
-    require_freshness_seconds: Optional[int]
-    max_claims_per_response: int
-    max_ops_per_request: int
-    enforce_user_subspace: bool
-    allow_external_net: bool
+    trust_level: str = "basic"
+    # TTL per artifact/evidence type (seconds)
+    ttl_seconds: Dict[str, int] = field(default_factory=lambda: {
+        "evidence": 90 * 24 * 3600,   # 90d
+        "artifact": 30 * 24 * 3600,   # 30d
+        "ui_cache": 7 * 24 * 3600,    # 7d
+        "log": 30 * 24 * 3600,
+    })
+    # p95 bounds (milliseconds) per pipeline stage
+    p95_bounds_ms: Dict[str, int] = field(default_factory=lambda: {
+        "plan": 1500,
+        "generate": 3500,
+        "test": 4000,
+        "verify": 2500,
+        "package": 2000,
+        "respond": 1200,
+        "adapter": 5000,
+    })
+    # רשת: allow/deny
+    net_allowlist_regex: List[str] = field(default_factory=lambda: [
+        r"^https://(api\.)?github\.com/.*$",
+        r"^https://(registry\.)?npmjs\.org/.*$",
+        r"^https://dl\.google\.com/.*$",
+        r"^https://developer\.android\.com/.*$",
+        r"^https://services\.gradle\.org/.*$",
+        r"^https://unity3d\.com/.*$",
+        r"^https://packages\.ubuntu\.com/.*$",
+        r"^https://(archive|security)\.ubuntu\.com/.*$",
+        r"^https://pypi\.org/.*$",
+        r"^https://(objects|storage)\.cloud\.googleapis\.com/.*$",
+        r"^https://(download|developer)\.nvidia\.com/.*$",
+        r"^wss://.*$",  # WebSocket (ייבדק מול hosts מורשים)
+    ])
+    net_blocklist_regex: List[str] = field(default_factory=lambda: [
+        r"^http://.*$",             # חסום HTTP לא מאובטח
+        r"^https://.*\.(ru|kp)$",   # דוגמה לחסימת TLDs
+    ])
+    ws_allowed_hosts: List[str] = field(default_factory=lambda: ["localhost", "127.0.0.1"])
+    # קבצים: אילו נתיבים מותר לקרוא/לכתוב (דוגמא שמרנית)
+    file_whitelist_glob: List[str] = field(default_factory=lambda: [
+        "./workspace/**",
+        "./.imu/**",
+        "./artifacts/**",
+        "./ui/**",
+        "./adapters/**",
+        "./tests/**",
+    ])
+    file_deny_glob: List[str] = field(default_factory=lambda: [
+        "/etc/**", "C:\\Windows\\**", "/var/lib/**", "/root/**", "/home/*/.ssh/**"
+    ])
+    # מגבלות קצב לפי נושא (topic)
+    rate_limits: Dict[str, RateLimit] = field(default_factory=lambda: {
+        "telemetry": RateLimit(capacity=100, refill_per_sec=30),
+        "logs": RateLimit(capacity=200, refill_per_sec=60),
+        "ui_push": RateLimit(capacity=60, refill_per_sec=20),
+        "build": RateLimit(capacity=10, refill_per_sec=0.1),  # build כבד—האטה
+    })
+    max_concurrent_streams: int = 16
+    max_burst_global: int = 512
+
+class PolicyEngine:
+    """אכיפה שמרנית טרם פעולה: רשת/קבצים/קצב/WS/TTL/p95."""
+    def __init__(self):
+        self.users: Dict[str, UserPolicy] = {}
+        self.global_burst = 0
+        self._burst_lock = threading.Lock()
+        self._burst_decay_last = time.time()
+
+    def get(self, user_id: str) -> UserPolicy:
+        if user_id not in self.users:
+            self.users[user_id] = UserPolicy(user_id=user_id)
+        return self.users[user_id]
+
+    # --- Burst control (N*burst) ---
+    def _decay_burst(self):
+        now = time.time()
+        with self._burst_lock:
+            # דעיכה ליניארית פשוטה—מורידה 100 יחידות לשנייה
+            self.global_burst = max(0, self.global_burst - int((now - self._burst_decay_last) * 100))
+            self._burst_decay_last = now
+
+    def try_burst(self, amount: int = 1) -> bool:
+        self._decay_burst()
+        with self._burst_lock:
+            if self.global_burst + amount > 4096:  # תקרה מוחלטת
+                return False
+            self.global_burst += amount
+            return True
+
+    # --- Network rules ---
+    def allow_url(self, user_id: str, url: str) -> bool:
+        pol = self.get(user_id)
+        if any(re.match(rx, url) for rx in pol.net_blocklist_regex):
+            return False
+        return any(re.match(rx, url) for rx in pol.net_allowlist_regex)
+
+    def allow_ws_host(self, user_id: str, host: str) -> bool:
+        pol = self.get(user_id)
+        return host in pol.ws_allowed_hosts
+
+    # --- File rules ---
+    def allow_path(self, user_id: str, path: str, write: bool = False) -> bool:
+        pol = self.get(user_id)
+        path = path.replace("\\", "/")
+        if any(fnmatch.fnmatch(path, g) for g in pol.file_deny_glob):
+            return False
+        if any(fnmatch.fnmatch(path, g) for g in pol.file_whitelist_glob):
+            return True
+        return False
+
+    # --- Rate limits ---
+    def rate_allow(self, user_id: str, topic: str, n: int = 1) -> bool:
+        pol = self.get(user_id)
+        rl = pol.rate_limits.get(topic)
+        if not rl:
+            return True
+        return rl.allow(n)
+
+    # --- p95 bounds ---
+    def within_p95(self, user_id: str, stage: str, ms: int) -> bool:
+        pol = self.get(user_id)
+        bound = pol.p95_bounds_ms.get(stage)
+        if bound is None:
+            return True
+        return ms <= bound
+
+POLICY = PolicyEngine()
 
 DEFAULT_POLICIES: Dict[TrustLevel, UserPolicy] = {
     "low": UserPolicy(
