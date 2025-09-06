@@ -1,11 +1,13 @@
 {
-  "$schema":"http://json-schema.org/draft-07/schema#",
-  "title":"AndroidGradle",
-  "type":"object",
-  "required":["keystore"],
-  "properties":{
-    "flavor":{"type":"string","default":""},
-    "buildType":{"type":"string","default":"Release"},
-    "keystore":{"type":"string","minLength":1}
-  }
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AndroidGradle",
+  "type": "object",
+  "required": ["keystore"],
+  "properties": {
+    "flavor": { "type": "string", "pattern": "^[A-Za-z0-9_]*$" },
+    "buildType": { "type": "string", "enum": ["Debug", "Release", "Aab"] },
+    "keystore": { "type": "string", "minLength": 1 },
+    "sign": { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
 }

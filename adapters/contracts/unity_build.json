@@ -1,14 +1,18 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title":"UnityBuild",
-  "type":"object",
-  "required":["project","target","method","version","log"],
-  "properties":{
-    "project":{"type":"string","minLength":1},
-    "target":{"type":"string","enum":["Android","iOS","StandaloneWindows64","StandaloneOSX","StandaloneLinux64","WebGL"]},
-    "method":{"type":"string","minLength":1},
-    "version":{"type":"string","minLength":3},
-    "log":{"type":"string","minLength":1}
-  }
+  "title": "UnityBuild",
+  "type": "object",
+  "required": ["project", "target", "method", "version", "log"],
+  "properties": {
+    "project": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": "string",
+      "enum": ["Android", "iOS", "StandaloneWindows64", "StandaloneOSX", "StandaloneLinux64", "WebGL"]
+    },
+    "method": { "type": "string", "pattern": "^[A-Za-z0-9_.]+$" },
+    "version": { "type": "string", "minLength": 5 },
+    "log": { "type": "string", "minLength": 1 },
+    "customArgs": { "type": "array", "items": { "type": "string" }, "maxItems": 10 }
+  },
+  "additionalProperties": false
 }
-
