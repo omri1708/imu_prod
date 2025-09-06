@@ -15,9 +15,11 @@ from pydantic import BaseModel, Field
 from security.network_policies import is_allowed, POLICY_DB
 from security.filesystem_policies import is_path_allowed, cleanup_ttl, FS_DB
 from adapters.mappings import WINGET, BREW, APT, CLI_TEMPLATES
+from server.provenance_api import router as prov_router
 
 APP = FastAPI(title="IMU Adapter API")
 
+APP.include_router(prov_router)
 # ---------- Models ----------
 
 class Evidence(BaseModel):
