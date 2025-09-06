@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import time, urllib.request, json, shutil, asyncio
-
+from policy.rbac import require_perm
 from server.stream_wfq import BROKER
 from runtime.p95 import GATES
 
@@ -23,6 +23,7 @@ def _post(path: str, body: dict) -> dict:
 def _have(x:str)->bool: return shutil.which(x) is not None
 
 class UnityK8sReq(BaseModel):
+
     user_id: str = "demo-user"
     project_dir: str
     target: str = "Android"
@@ -31,6 +32,7 @@ class UnityK8sReq(BaseModel):
 
 @router.post("/unity_k8s")
 def unity_k8s(req: UnityK8sReq):
+    require_perm(req.user_id, "runbook:unity_k8s")
     t0=time.time()
     topic="timeline"
     BROKER.ensure_topic(topic, rate=100.0, burst=500, weight=2)
@@ -72,6 +74,7 @@ class AndroidReq(BaseModel):
 
 @router.post("/android")
 def android(rb: AndroidReq):
+    require_perm(rb.user_id, "android")
     t0=time.time(); topic="timeline"; BROKER.ensure_topic(topic, rate=100.0, burst=500, weight=2)
     params={"flavor":"Release","buildType":"Aab","keystore":rb.app_dir+"/keystore.jks"}
     d=_post("/adapters/dry_run", {"user_id":rb.user_id,"kind":"android.gradle","params":params})
@@ -90,6 +93,7 @@ class IOSReq(BaseModel):
 
 @router.post("/ios")
 def ios(rb: IOSReq):
+    require_perm(rb.user_id, "ios")
     t0=time.time(); topic="timeline"; BROKER.ensure_topic(topic, rate=100.0, burst=500, weight=2)
     params={"workspace":rb.workspace,"scheme":rb.scheme,"config":rb.config}
     d=_post("/adapters/dry_run", {"user_id":rb.user_id,"kind":"ios.xcode","params":params})
@@ -107,6 +111,7 @@ class CUDAReq(BaseModel):
 
 @router.post("/cuda")
 def cuda(rb: CUDAReq):
+    require_perm(rb.user_id, "cuda")
     t0=time.time(); topic="timeline"; BROKER.ensure_topic(topic, rate=100.0, burst=500, weight=2)
     params={"src":rb.src,"out":rb.out}
     d=_post("/adapters/dry_run", {"user_id":rb.user_id,"kind":"cuda.nvcc","params":params})

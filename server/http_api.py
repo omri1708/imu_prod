@@ -11,6 +11,7 @@ from security.filesystem_policies import is_path_allowed, cleanup_ttl, FS_DB
 from adapters.mappings import WINGET, BREW, APT, CLI_TEMPLATES
 from runtime.p95 import GATES
 from server.stream_wfq import BROKER  # WFQ Broker
+from policy.rbac import require_perm
 
 APP = FastAPI(title="IMU Adapter API")
 
@@ -25,7 +26,9 @@ from server.supplychain_index_api import router as sc_index_router
 from server.runbook_api import router as runbook_router
 from server.key_admin_api import router as key_admin_router
 from server.archive_api import router as archive_router
+from server.bundles_api import router as bundles_router
 
+APP.include_router(bundles_router)
 APP.include_router(archive_router)
 APP.include_router(key_admin_router)
 APP.include_router(prov_router)
@@ -76,12 +79,14 @@ async def get_net_policy(user_id: str):
     })
 
 # ---------- Capability request ----------
+
 class CapabilityRequest(BaseModel):
     user_id: str
     capability: str   # e.g., "unity.hub", "jdk", "gradle", "kubectl", "cuda"
-
+    
 @APP.post("/capabilities/request")
 async def request_capability(req: CapabilityRequest):
+    require_perm(req.user_id, "capabilities:request")
     fam = _os_family()
     if fam == "win":
         mp = WINGET.get(req.capability)
@@ -118,6 +123,7 @@ class DryRunRequest(BaseModel):
 
 @APP.post("/adapters/dry_run", response_model=RunResult)
 async def adapters_dry_run(req: DryRunRequest):
+    require_perm(req.user_id, f"adapter:dry_run:{req.kind}")
     fam = _os_family()
     tmpl_map = CLI_TEMPLATES.get(req.kind)
     if not tmpl_map:
@@ -163,6 +169,7 @@ class RunAdapterRequest(BaseModel):
 
 @APP.post("/adapters/run", response_model=RunResult)
 async def adapters_run(req: RunAdapterRequest):
+    require_perm(req.user_id, f"adapter:dry_run:{req.kind}")
     t0 = time.time()
     BROKER.ensure_topic("timeline", rate=50, burst=200, weight=2)
     BROKER.ensure_topic("progress", rate=80, burst=400, weight=3)
