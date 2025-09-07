@@ -5,9 +5,6 @@ from typing import Dict, Any, List, Optional
 from user.memory_state import MemoryState
 from user.consciousness import UserConsciousness
 
-from user.memory_state import MemoryState
-
-
 class Consolidation:
     """
     מנהל קונסולידציה:

@@ -289,13 +289,16 @@ class VM:
                 # החלפת reg:x לערך
                 out = {}
                 for k,v in raw_body.items(): out[k] = resolve(v)
-                # FACT-GATE ENFORCEMENT
-                try:
-                    gate = FactGate()
-                    gate.enforce(ctx, out, ctx.get("__fact_policy__"))
+                # FACT-GATE ENFORCEMENT (ניתן לכיבוי ע"י __enforce_in_vm__=False)
+                if ctx.get("__enforce_in_vm__", True):
+                    try:
+                        gate = FactGate()
+                        gate.enforce(ctx, out, ctx.get("__fact_policy__"))
+                        code, body = status, out
+                    except GroundValidationError as e:
+                        code, body = 412, {"error":"precondition_failed","detail":str(e)}
+                else:
                     code, body = status, out
-                except GroundValidationError as e:
-                    code, body = 412, {"error":"precondition_failed","detail":str(e)}
                 # סיום הפעלה
                 break
 

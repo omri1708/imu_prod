@@ -59,3 +59,59 @@ next_phase_trace:
 	git push --force-with-lease -u origin "$$CUR"
 	git switch -c "$$NEXT" 2>/dev/null || git switch "$$NEXT"
 	echo "✅ per-file trace commits pushed on $$CUR; opened $$NEXT"
+
+.PHONY: test-auto
+test-auto:
+	python -m imu_repo.engine.testgen.runtime_cases
+	python -m imu_repo.engine.testgen.kpi_cases
+	python -m imu_repo.tools.test_orchestrator
+
+
+.PHONY: phase_audit
+phase_audit:
+	set -euo pipefail
+	mkdir -p runs
+	OUT="runs/phase_audit_$$(date -u +%Y%m%dT%H%M%SZ).md"
+	PH_TMP="$$(mktemp)"
+
+	# אסוף את כל הענפים phase_* ממוינים מספרית (בלי mapfile)
+	git for-each-ref --format='%(refname:short)' refs/heads/phase_* \
+	  | awk -F_ '{printf "%s %s\n",$$0,$$2}' \
+	  | sort -k2,2n \
+	  | awk '{print $$1}' > "$$PH_TMP"
+
+	echo "# Phase Audit" > "$$OUT"
+	echo "" >> "$$OUT"
+	echo "- Generated: $$(date -u '+%Y-%m-%d %H:%M:%SZ')" >> "$$OUT"
+	echo "" >> "$$OUT"
+
+	while IFS= read -r BR; do
+	  [ -z "$$BR" ] && continue
+	  N="$${BR#phase_}"
+	  if git show-ref --verify --quiet "refs/heads/phase_$$(($$N-1))"; then
+	    BASE="phase_$$(($$N-1))"
+	  else
+	    BASE="main"
+	  fi
+
+	  echo "## $$BR (base: $$BASE)" >> "$$OUT"
+	  DIFF_NSTAT="$$(git diff --shortstat --find-renames "$$BASE"..$$BR || true)"
+	  echo "" >> "$$OUT"
+	  echo "- Diff: $$DIFF_NSTAT" >> "$$OUT"
+	  echo "" >> "$$OUT"
+
+	  git diff --name-status --find-renames "$$BASE"..$$BR \
+	    | while IFS=$'\t' read -r ST P1 P2; do
+	        [ -z "$$ST" ] && continue
+	        case "$$ST" in R*) F="$$P2";; *) F="$$P1";; esac
+	        TRACE="$$(git log --reverse --pretty=%s -- "$$F" 2>/dev/null \
+	          | grep -Eo 'phase_[0-9]+' | awk '!seen[$$0]++' | paste -sd '-->' -)"
+	        [ -n "$$TRACE" ] && TRACE="$$TRACE-->" || TRACE=""
+	        echo "| $$ST | \`$$F\` | $$TRACE$$BR |" >> "$$OUT"
+	      done
+
+	  echo "" >> "$$OUT"
+	done < "$$PH_TMP"
+
+	rm -f "$$PH_TMP"
+	echo "✅ Wrote $$OUT"

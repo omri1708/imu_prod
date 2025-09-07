@@ -9,7 +9,7 @@ from grounded.claims import current, respond_with_evidence, GateDenied
 from alerts.notifier import alert, metrics_log
 from grounded.provenance import sign_evidence, persist_record, verify_signature
 
-LOGS = "/mnt/data/imu_repo/logs"
+LOGS = os.getenv("IMU_LOG_DIR", ".imu_state/logs")
 os.makedirs(LOGS, exist_ok=True)
 
 try:
@@ -30,15 +30,6 @@ except Exception:
             for k,e in self.buf: out.append(dict(e, key=k))
             self.buf.clear()
             return out
-
-def _ensure_hmac_key(cfg: Dict[str,Any]) -> bytes:
-    ev = cfg.setdefault("evidence", {})
-    key_hex = ev.get("hmac_key")
-    if not key_hex:
-        key_hex = secrets.token_hex(32)
-        ev["hmac_key"] = key_hex
-        save_config(cfg)
-    return bytes.fromhex(key_hex)
 
 def _ensure_hmac_key(cfg: Dict[str,Any]) -> bytes:
     ev = cfg.setdefault("evidence", {})

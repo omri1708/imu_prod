@@ -1,6 +1,6 @@
 # imu_repo/engine/pipeline.py
 from __future__ import annotations
-import json, time
+import os, json, time
 from typing import Dict, Any, List, Tuple, Optional
 import time as _t
 
@@ -20,12 +20,10 @@ from adapters.net_sandbox import NetSandbox
 from adapters.db_localqueue import LocalQueue
 
 from user.memory_state import MemoryState
-from user.consciousness import UserConsciousness
+from user.consciousness import UserConsciousness, UserMind
 from user.consolidation import Consolidation
 from obs.kpi import KPI
 from user.auth import UserStore
-from user.consciousness import UserMind
-from user.memory_state import MemoryState
 from engine.exec_api import exec_best
 
 
@@ -34,7 +32,7 @@ from engine.exec_api import exec_best
 # הוסף ל־engine/pipeline.py (בפונקציה שמטפלת בבקשות) מסלול להרצת תא־קוד:
 
 # בתוך engine/pipeline.py (במקום מתאים במסלול HTTP/CLI)
-from engine.exec_api import exec_best
+# from engine.exec_api import exec_best
 # ...
 # if request["type"] == "exec_cell":
 #     result = exec_best(request["task"], ctx=request.get("ctx",{}))
@@ -48,7 +46,8 @@ class ResourceRequired(Exception):
 class Engine:
     """Main engine orchestrating program execution with grounding, contracts, and audit."""
 
-    def __init__(self, root:str=".imu_state"):
+    def __init__(self, root: str | None = None):
+        root = root or os.getenv("IMU_ROOT", ".imu_state")
         self.store = ProvenanceStore(f"{root}/prov")
         self.idx   = EvidenceIndex(self.store)
         self.mem  = MemoryState(root=f"{root}/memory")
@@ -96,23 +95,28 @@ class Engine:
         api_allow_hosts: List[str] | None = None,
         ctx: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, Dict[str, Any]]:
-        
 
+        ctx = dict(ctx or {})
         user_id = ctx.get("user_id") or payload.get("user_id", "anon")
         self.user_store.ensure_user(user_id)
         mind = UserMind(user_id, MemoryState(user_id))
         ctx["__mind__"] = mind
-        ctx["__routing_hints__"] = mind.routing_hints() # TODO - לבדוק OP יעודי.
-            # אפקט רגישות/מטרות→רמזי ניתוב
-        hints = mind.routing_hints()
-        ctx["__routing_hints__"] = hints
-        
-        # אם הוגדר allowlist לאימות API — לעדכן את ה־ApiRule בזמן ריצה
-        for r in self.gate.rules:
-            if isinstance(r, ApiRule):
-                r.allow_hosts = api_allow_hosts or []
-
-        ctx = {"payload": payload}        
+        ctx["__routing_hints__"] = mind.routing_hints()
+        # Gate מקומי לריצה הזו (לא נוגע בכללים של המופע המשותף)
+        gate = FactGate(
+            self.idx,
+            rules=[
+                SchemaRule(),
+                FreshnessRule(max_age_seconds=86400),
+                TrustRule(min_trust=0.6),
+                ApiRule(allow_hosts=api_allow_hosts or []),
+                ConsistencyRule(),
+            ],
+            store=self.gate.store,
+            registry=self.gate.registry,
+        )
+        ctx["payload"] = payload
+        ctx["__enforce_in_vm__"] = False      
         _t0 = _t.time()
         
         try:
@@ -145,7 +149,7 @@ class Engine:
 
         # אכיפת Grounding + Trust + API
         if claims:
-            ok, diags = self.gate.check_claims(claims, strict=True)
+            ok, diags = gate.check_claims(claims, strict=True)
             self.audit.append("claims_checked", {"claims": claims, "ok": ok, "diags": diags})
             if not ok:
                 return 422, {"error": "invalid_or_weak_evidence", "diags": diags}
@@ -160,7 +164,7 @@ class Engine:
                 ctx.setdefault("__claims__", claims)
                 ctx.setdefault("__registers__", {})  # אופציונלי — אם תרצה להעביר רגיסטרים מה-VM
                 # אפשר להעביר FactGatePolicy מותאם דרך ctx["__fact_policy__"], אם אין — דיפולט
-                self.gate.enforce(ctx, body, ctx.get("__fact_policy__"))
+                gate.enforce(ctx, body, ctx.get("__fact_policy__"))
             except GroundValidationError as e:
                 self.audit.append("engine_fact_gate_block", {"detail": str(e)})
                 code, body = 412, {"error":"precondition_failed","detail":str(e)}

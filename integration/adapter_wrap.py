@@ -52,6 +52,8 @@ def _render_cmd(template: str, params: Dict[str,Any]) -> List[str]:
 
 # --- עטיפה עיקרית ---
 async def run_adapter_with_assurance(user_id: str, kind: str, params: Dict[str,Any], execute: bool) -> Dict[str,Any]:
+
+    from learning.event_log import record_resource_required
     # Consent חובה
     um = UserModel(UserStore("./assurance_store_users"))
     if not um.has_consent(user_id, "adapters/run"):
@@ -97,7 +99,9 @@ async def run_adapter_with_assurance(user_id: str, kind: str, params: Dict[str,A
                 no_net=ex.policy.no_net_default
             ))
         except ResourceRequired as e:
-            raise
+            # רישום לאנליטיקה של הלמידה
+            record_resource_required("./logs/resource_required.jsonl", e.what)
+            return {"ok": False, "resource_required": str(e)}
         payload = {"dry_run": False, "argv": argv, "exit_code": rc, "stdout_sha256": __import__("hashlib").sha256(out).hexdigest()}
         # evidence של stdout
         digest_stdout = sess.cas.put_bytes(out, meta={"channel":"stdout"})

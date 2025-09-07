@@ -13,6 +13,11 @@ from server.pipeline.run_adapter import run_adapter, DryRunError
 from server.security.audit import audit_log
 from server.security.provenance import ProvenanceStore
 from server.state.ttl import TTLRules
+from fastapi import FastAPI
+from server.routers.adapters_secure import router as adapters_secure_router
+from server.routers.consent_api import router as consent_router
+from server.routers.respond_api import router as respond_router
+from server.routers.program_api import router as program_router
 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -37,6 +42,11 @@ app.add_middleware(
 )
 
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
+APP = FastAPI(title="IMU Core")
+APP.include_router(consent_router)
+APP.include_router(adapters_secure_router)  # /adapters/secure/run
+APP.include_router(respond_router)
+APP.include_router(program_router)
 
 prov = ProvenanceStore()
 
