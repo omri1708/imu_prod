@@ -1,0 +1,11 @@
+{{- if and .Values.gating.enabled .Values.kube-prometheus-stack }}
+  {{- $ini := (pluck "grafana.ini" .Values.kube-prometheus-stack.grafana | first) | default dict }}
+  {{- $oauth := get $ini "auth.generic_oauth" | default dict }}
+  {{- if eq (get $oauth "enabled" | default false) true }}
+    {{- $client := get $oauth "client_id" | default "" }}
+    {{- $secret := get $oauth "client_secret" | default "" }}
+    {{- if or (eq $client "") (eq $secret "") }}
+      {{- fail "Gating: Grafana OIDC enabled but client_id/client_secret are empty (inject via ESO/Pulumi)" }}
+    {{- end }}
+  {{- end }}
+{{- end }}

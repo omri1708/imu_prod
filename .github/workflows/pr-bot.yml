@@ -5,7 +5,33 @@ on:
   workflow_run:
     workflows: [ "umbrella-e2e", "umbrella-diff", "umbrella-redcases", "kind-smoke", "umbrella-kind-smoke" ]
     types: [completed]
-
+      - name: Compose comment
+        id: compose
+        env:
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+          SLO_UID:     ${{ secrets.GRAFANA_SLO_UID }}
+          GATE_UID:    ${{ secrets.GRAFANA_GATE_UID }}
+          DIFF_UID:    ${{ secrets.GRAFANA_DIFF_UID }}
+          KIND_UID:    ${{ secrets.GRAFANA_KIND_UID }}
+          ARGO_URL:    ${{ secrets.ARGO_URL }}
+          SHA:         ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          G="${GRAFANA_URL:-https://grafana.example.com}"
+          slo="${SLO_UID:-imu_slo}"; gate="${GATE_UID:-imu_gatekeeper}"; diffs="${DIFF_UID:-imu_allowed_diffs}"; kind="${KIND_UID:-imu_kind_smoke_slo}"
+          echo "[[links]]" > /tmp/links.md
+          echo "SLO:     ${G}/d/${slo}?from=now-6h&to=now"     >> /tmp/links.md
+          echo "Gate:    ${G}/d/${gate}?from=now-6h&to=now"    >> /tmp/links.md
+          echo "Diffs:   ${G}/d/${diffs}?from=now-6h&to=now"   >> /tmp/links.md
+          echo "Kind:    ${G}/d/${kind}?from=now-6h&to=now"    >> /tmp/links.md
+          {
+            echo "**IMU CI Summary**"
+            echo
+            echo "• ✅ CI checks: e2e / diff / redcases / kind-smoke  "
+            echo -n "• 📊 Grafana: "; cat /tmp/links.md | sed -e 's#^#\[#' -e 's#: #](/#' -e 's#$# )#' | paste -sd " • " -
+            echo
+            echo "• 🚀 ArgoCD: ${ARGO_URL:-https://argocd.example.com}"
+            echo; echo "_Commit:_ ${SHA}"
+          } > /tmp/comment.md
 jobs:
   comment:
     runs-on: ubuntu-latest

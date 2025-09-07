@@ -1,0 +1,9 @@
+{{- if .Values.gating.enabled }}
+  {{- $cm := (lookup "v1" "ConfigMap" "argocd" "argocd-cm") -}}
+  {{- if and $cm (hasKey $cm.data "dex.config") }}
+    {{- $dexSecret := (lookup "v1" "Secret" "argocd" "dex-oidc") -}}
+    {{- if not $dexSecret }}
+      {{- fail "Gating: dex.config enabled but Secret argocd/dex-oidc not found. Provision via ESO/Pulumi." }}
+    {{- end }}
+  {{- end }}
+{{- end }}
