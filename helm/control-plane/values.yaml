@@ -46,3 +46,12 @@ gatekeeper:
 
 dashboards:
   enabled: true
+
+securityContext:
+  pod:
+    runAsNonRoot: true
+    seccompProfile: { type: RuntimeDefault }
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: { drop: [ "ALL" ] }

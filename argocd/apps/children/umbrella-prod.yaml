@@ -1,19 +1,23 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: imu-apps
+  name: imu-umbrella-prod
   namespace: argocd
 spec:
-  project: default
+  project: prod
   source:
     repoURL: https://github.com/your-org/imu_repo
     targetRevision: main
-    path: argocd/apps/children
+    path: helm/umbrella
+    helm:
+      valueFiles: [ values.yaml, values.prod.yaml ]
   destination:
     server: https://kubernetes.default.svc
-    namespace: argocd
+    namespace: prod
   syncPolicy:
     automated:
       prune: false
       selfHeal: true
-    syncOptions: [ CreateNamespace=true ]
+    retry:
+      limit: 2
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }

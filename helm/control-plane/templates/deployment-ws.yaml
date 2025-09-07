@@ -6,17 +6,16 @@ metadata:
   labels: { app: {{ include "cp.fullname" . }}, tier: ws }
 spec:
   replicas: {{ .Values.replicas.ws }}
-  selector:
-    matchLabels: { app: {{ include "cp.fullname" . }}, tier: ws }
+  selector: { matchLabels: { app: {{ include "cp.fullname" . }}, tier: ws } }
   template:
-    metadata:
-      labels: { app: {{ include "cp.fullname" . }}, tier: ws }
+    metadata: { labels: { app: {{ include "cp.fullname" . }}, tier: ws } }
     spec:
       serviceAccountName: {{ include "cp.fullname" . }}-sa
+      securityContext: {{- toYaml .Values.securityContext.pod | nindent 6 }}
       containers:
       - name: ws
         image: "{{ .Values.images.ws.repository }}:{{ .Values.images.ws.tag }}"
         imagePullPolicy: "{{ .Values.images.ws.pullPolicy }}"
-        ports:
-        - containerPort: {{ .Values.service.wsPort }}
+        securityContext: {{- toYaml .Values.securityContext.container | nindent 8 }}
+        ports: [ { containerPort: {{ .Values.service.wsPort }} } ]
         # מצופה שה-image יפעיל: python server/stream_wfq_ws.py (מאזין על 8766)
