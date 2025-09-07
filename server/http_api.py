@@ -50,6 +50,8 @@ from adapters.synth.registry import reload_registry as _synth_reload
 from server.synth_presets_api import router as synth_presets_router
 from server.k8s_template_synth_api import router as k8s_synth_router
 from server.helm_template_synth_api import router as helm_synth_router
+from server.controlplane_deploy_api import router as cp_deploy_router
+
 
 _synth_reload()
 
@@ -58,6 +60,7 @@ APP.include_router(scheduler_router)
 scheduler_boot()
 start_policy_router()
 
+APP.include_router(cp_deploy_router)
 APP.include_router(helm_synth_router)
 APP.include_router(k8s_synth_router)
 APP.include_router(synth_presets_router)

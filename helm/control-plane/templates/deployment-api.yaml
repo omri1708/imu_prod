@@ -12,6 +12,7 @@ spec:
     metadata:
       labels: { app: {{ include "cp.fullname" . }}, tier: api }
     spec:
+      serviceAccountName: {{ include "cp.fullname" . }}-sa
       containers:
       - name: api
         image: "{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}"

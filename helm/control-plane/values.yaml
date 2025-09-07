@@ -43,3 +43,6 @@ gatekeeper:
   requireLabels:
     enabled: true
     key: "team"
+
+dashboards:
+  enabled: true

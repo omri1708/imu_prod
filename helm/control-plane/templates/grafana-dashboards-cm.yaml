@@ -1,0 +1,16 @@
+{{- if .Values.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cp.fullname" . }}-grafana-dashboards
+  namespace: {{ .Values.namespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  imu_api.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_api.json" | indent 4) }}
+  imu_ws.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_ws.json" | indent 4) }}
+  imu_scheduler.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_scheduler.json" | indent 4) }}
+{{- end }}
