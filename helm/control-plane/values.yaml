@@ -1,0 +1,45 @@
+namespace: default
+
+images:
+  api: { repository: ghcr.io/your-org/imu-api, tag: latest, pullPolicy: IfNotPresent }
+  ws:  { repository: ghcr.io/your-org/imu-ws,  tag: latest, pullPolicy: IfNotPresent }
+  ui:  { repository: nginx,                   tag: alpine, pullPolicy: IfNotPresent }
+
+replicas: { api: 1, ws: 1, ui: 1 }
+
+hpa:
+  enabled: true
+  api: { min: 1, max: 5, cpu: 75 }
+  ws:  { min: 1, max: 5, cpu: 75 }
+
+service:
+  apiPort: 8000
+  wsPort:  8766
+  uiPort:  8080
+  type: ClusterIP
+
+serviceMonitor:
+  enabled: true
+  labels: { release: prom-operator }
+  interval: 30s
+  path: /metrics
+  scheme: http
+
+networkPolicy:
+  enabled: true
+  profile: standard   # strict|standard|lenient
+  allowSameNamespace: true
+  ingressCidrs: []
+  egressCidrs: ["0.0.0.0/0"]
+
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: ""
+
+gatekeeper:
+  enabled: false
+  requireLabels:
+    enabled: true
+    key: "team"

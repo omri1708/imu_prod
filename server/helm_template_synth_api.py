@@ -1,11 +1,10 @@
 # server/helm_template_synth_api.py
 # Helm Chart generator: spec → chart under helm/generated/<slug>/ with Chart.yaml, values.yaml, templates/*.yaml
-# API: create/list/get/dry_template/upgrade   (מורחב: Ingress / ServiceMonitor / NetworkPolicy)
-
+# Supports: Ingress / ServiceMonitor / NetworkPolicy (profiles) / IngressClass / cert-manager Issuer/Certificate
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import json, re
 
@@ -31,6 +30,11 @@ class IngressSpec(BaseModel):
     tlsSecret: Optional[str] = None
     annotations: Dict[str,str] = {}
 
+class IngressClassSpec(BaseModel):
+    enabled: bool = False
+    name: str = "nginx"
+    controller: str = "k8s.io/ingress-nginx"
+
 class ServiceMonitorSpec(BaseModel):
     enabled: bool = False
     scrapePort: int = 80
@@ -41,9 +45,18 @@ class ServiceMonitorSpec(BaseModel):
 
 class NetworkPolicySpec(BaseModel):
     enabled: bool = False
+    profile: str = Field("standard", regex="^(strict|standard|lenient)$")
     allowSameNamespace: bool = True
     ingressCidrs: list[str] = []
     egressCidrs: list[str] = []
+
+class CertManagerSpec(BaseModel):
+    enabled: bool = False
+    issuerKind: str = Field("Issuer", regex="^(Issuer|ClusterIssuer)$")
+    issuerName: str = "selfsigned"
+    issuerNamespace: Optional[str] = None
+    certificateSecretName: Optional[str] = None
+    dnsNames: list[str] = []
 
 class ChartSpec(BaseModel):
     name: str
@@ -56,14 +69,16 @@ class ChartSpec(BaseModel):
     containerPort: int = 80
     image: ChartImage
     env: Dict[str,str] = {}
-    resources: Dict[str,str] = {}   # {"cpu":"100m","memory":"128Mi"}
+    resources: Dict[str,str] = {}
     hpa: bool = False
     hpaMin: int = 2
     hpaMax: int = 10
     hpaCpu: int = 80
     ingress: IngressSpec = IngressSpec()
+    ingressClass: IngressClassSpec = IngressClassSpec()
     serviceMonitor: ServiceMonitorSpec = ServiceMonitorSpec()
     networkPolicy: NetworkPolicySpec = NetworkPolicySpec()
+    certManager: CertManagerSpec = CertManagerSpec()
 
 def chart_yaml(s:ChartSpec)->str:
     return f"""apiVersion: v2
@@ -82,12 +97,18 @@ def values_yaml(s:ChartSpec)->str:
     ingress = f"""
 ingress:
   enabled: {str(s.ingress.enabled).lower()}
-  className: {s.ingress.className or 'null'}
-  host: {s.ingress.host or 'null'}
-  path: {s.ingress.path}
-  tlsSecret: {s.ingress.tlsSecret or 'null'}
+  className: {json.dumps(s.ingress.className) if s.ingress.className else 'null'}
+  host: {json.dumps(s.ingress.host) if s.ingress.host else 'null'}
+  path: {json.dumps(s.ingress.path)}
+  tlsSecret: {json.dumps(s.ingress.tlsSecret) if s.ingress.tlsSecret else 'null'}
   annotations:
 {''.join([f'    {k}: \"{v}\"\n' for k,v in s.ingress.annotations.items()]) if s.ingress.annotations else '    {}'}
+"""
+    ingress_class = f"""
+ingressClass:
+  enabled: {str(s.ingressClass.enabled).lower()}
+  name: {json.dumps(s.ingressClass.name)}
+  controller: {json.dumps(s.ingressClass.controller)}
 """
     sm = f"""
 serviceMonitor:
@@ -102,11 +123,22 @@ serviceMonitor:
     np = f"""
 networkPolicy:
   enabled: {str(s.networkPolicy.enabled).lower()}
+  profile: {json.dumps(s.networkPolicy.profile)}
   allowSameNamespace: {str(s.networkPolicy.allowSameNamespace).lower()}
   ingressCidrs:
 {''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.ingressCidrs]) if s.networkPolicy.ingressCidrs else '    []'}
   egressCidrs:
 {''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.egressCidrs]) if s.networkPolicy.egressCidrs else '    []'}
+"""
+    cm = f"""
+certManager:
+  enabled: {str(s.certManager.enabled).lower()}
+  issuerKind: {json.dumps(s.certManager.issuerKind)}
+  issuerName: {json.dumps(s.certManager.issuerName)}
+  issuerNamespace: {json.dumps(s.certManager.issuerNamespace) if s.certManager.issuerNamespace else 'null'}
+  certificateSecretName: {json.dumps(s.certManager.certificateSecretName) if s.certManager.certificateSecretName else 'null'}
+  dnsNames:
+{''.join([f'    - {json.dumps(n)}\n' for n in s.certManager.dnsNames]) if s.certManager.dnsNames else '    []'}
 """
     return f"""namespace: {s.namespace}
 replicaCount: {s.replicas}
@@ -126,9 +158,11 @@ hpa:
   min: {s.hpaMin}
   max: {s.hpaMax}
   cpu: {s.hpaCpu}
+{ingress_class}
 {ingress}
 {sm}
 {np}
+{cm}
 """
 
 def tpl_helpers(name:str)->str:
@@ -178,12 +212,15 @@ kind: Service
 metadata:
   name: {{{{ include "{name}.fullname" . }}}}-svc
   namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+  labels:
+    app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
 spec:
   type: {{{{ .Values.service.type }}}}
   selector:
     app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
   ports:
-  - port: {{{{ .Values.service.port }}}}
+  - name: http
+    port: {{{{ .Values.service.port }}}}
     targetPort: {{{{ .Values.container.port }}}}
 """
 
@@ -211,6 +248,17 @@ spec:
 {{{{- end }}}}
 """
 
+def tpl_ingressclass(name:str)->str:
+    return f"""{{{{- if .Values.ingressClass.enabled }}}}
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{{{ .Values.ingressClass.name }}}}
+spec:
+  controller: {{{{ .Values.ingressClass.controller }}}}
+{{{{- end }}}}
+"""
+
 def tpl_ingress(name:str)->str:
     return f"""{{{{- if .Values.ingress.enabled }}}}
 apiVersion: networking.k8s.io/v1
@@ -218,11 +266,16 @@ kind: Ingress
 metadata:
   name: {{{{ include "{name}.fullname" . }}}}-ing
   namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-{{{{- if .Values.ingress.className }}}}
   annotations:
-    kubernetes.io/ingress.class: "{{{{ .Values.ingress.className }}}}"
+{{{{- if .Values.ingress.annotations }}}}
+{{{{ toYaml .Values.ingress.annotations | indent 4 }}}}
+{{{{- else }}}}
+    {{}}
 {{{{- end }}}}
 spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{{{ .Values.ingress.className }}}}
+  {{- end }}
   rules:
   - host: {{{{ .Values.ingress.host }}}}
     http:
@@ -234,12 +287,12 @@ spec:
             name: {{{{ include "{name}.fullname" . }}}}-svc
             port:
               number: {{{{ .Values.service.port }}}}
-{{{{- if .Values.ingress.tlsSecret }}}}
+  {{- if .Values.ingress.tlsSecret }}
   tls:
   - hosts:
     - {{{{ .Values.ingress.host }}}}
     secretName: {{{{ .Values.ingress.tlsSecret }}}}
-{{{{- end }}}}
+  {{- end }}
 {{{{- end }}}}
 """
 
@@ -258,7 +311,6 @@ spec:
       app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
   endpoints:
   - port: http
-    targetPort: {{{{ .Values.service.port }}}}
     interval: {{{{ .Values.serviceMonitor.interval }}}}
     path: {{{{ .Values.serviceMonitor.path }}}}
     scheme: {{{{ .Values.serviceMonitor.scheme }}}}
@@ -266,6 +318,7 @@ spec:
 """
 
 def tpl_network_policy(name:str)->str:
+    # מצבי profile: strict/standard/lenient
     return f"""{{{{- if .Values.networkPolicy.enabled }}}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -280,18 +333,72 @@ spec:
   - Ingress
   - Egress
   ingress:
-  - {{{{- if .Values.networkPolicy.allowSameNamespace }}}}
-    from:
+  - {{}} # default drop depends on cluster policy; add rules below by profile
+  {{- if eq .Values.networkPolicy.profile "strict" }}
+  - from:
+    {{- if .Values.networkPolicy.allowSameNamespace }}
     - podSelector: {{}}
-    {{{{- end }}}}
-    {{{{- range .Values.networkPolicy.ingressCidrs }}}}
+    {{- end }}
+    {{- range .Values.networkPolicy.ingressCidrs }}
     - ipBlock: {{ cidr: {{{{ . }}}} }}
-    {{{{- end }}}}
+    {{- end }}
+  {{- else if eq .Values.networkPolicy.profile "standard" }}
+  - from:
+    - podSelector: {{}}
+  {{- else }} # lenient
+  - {{}} # allow all
+  {{- end }}
   egress:
-  - {{{{- range .Values.networkPolicy.egressCidrs }}}}
-    to:
+  - {{}} # base rule
+  {{- if eq .Values.networkPolicy.profile "strict" }}
+  - to:
+    {{- range .Values.networkPolicy.egressCidrs }}
     - ipBlock: {{ cidr: {{{{ . }}}} }}
-    {{{{- end }}}}
+    {{- end }}
+  {{- else if eq .Values.networkPolicy.profile "standard" }}
+  - {{}} # allow cluster DNS/metadata left to cluster defaults
+  {{- else }}
+  - {{}} # allow all
+  {{- end }}
+{{{{- end }}}}
+"""
+
+def tpl_cert_issuer(name:str)->str:
+    return f"""{{{{- if and .Values.certManager.enabled (eq .Values.certManager.issuerKind "Issuer") }}}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{{{ .Values.certManager.issuerName }}}}
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+spec:
+  selfSigned: {{}}
+{{{{- end }}}}
+{{{{- if and .Values.certManager.enabled (eq .Values.certManager.issuerKind "ClusterIssuer") }}}}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{{{ .Values.certManager.issuerName }}}}
+spec:
+  selfSigned: {{}}
+{{{{- end }}}}
+"""
+
+def tpl_cert_certificate(name:str)->str:
+    return f"""{{{{- if .Values.certManager.enabled }}}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{{{ include "{name}.fullname" . }}}}-crt
+  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
+spec:
+  secretName: {{{{ .Values.certManager.certificateSecretName | default (printf "%s-crt" (include "{name}.fullname" .)) }}}}
+  issuerRef:
+    name: {{{{ .Values.certManager.issuerName }}}}
+    kind: {{{{ .Values.certManager.issuerKind }}}}
+  dnsNames:
+  {{- range .Values.certManager.dnsNames }}
+  - {{{{ . }}}}
+  {{- end }}
 {{{{- end }}}}
 """
 
@@ -305,12 +412,14 @@ def create(spec: ChartSpec):
     (base/"templates"/"deployment.yaml").write_text(tpl_deployment(spec.name), encoding="utf-8")
     (base/"templates"/"service.yaml").write_text(tpl_service(spec.name), encoding="utf-8")
     (base/"templates"/"hpa.yaml").write_text(tpl_hpa(spec.name), encoding="utf-8")
+    (base/"templates"/"ingressclass.yaml").write_text(tpl_ingressclass(spec.name), encoding="utf-8")
     (base/"templates"/"ingress.yaml").write_text(tpl_ingress(spec.name), encoding="utf-8")
     (base/"templates"/"servicemonitor.yaml").write_text(tpl_service_monitor(spec.name), encoding="utf-8")
     (base/"templates"/"networkpolicy.yaml").write_text(tpl_network_policy(spec.name), encoding="utf-8")
-    # חוזה ערכים "קל" לעיון
+    (base/"templates"/"issuer.yaml").write_text(tpl_cert_issuer(spec.name), encoding="utf-8")
+    (base/"templates"/"certificate.yaml").write_text(tpl_cert_certificate(spec.name), encoding="utf-8")
     (base/"contract.json").write_text(json.dumps({"title":"Values","type":"object"}, indent=2), encoding="utf-8")
-    (base/"README.md").write_text(f"# {spec.name} (Helm chart, auto-generated)\n\nWith Ingress/ServiceMonitor/NetworkPolicy.\n", encoding="utf-8")
+    (base/"README.md").write_text(f"# {spec.name} (Helm chart, auto-generated)\nWith Ingress/IngressClass/ServiceMonitor/NetworkPolicy/Certificate.\n", encoding="utf-8")
     return {"ok": True, "slug": slug, "dir": str(base), "release": spec.release, "namespace": spec.namespace}
 
 @router.get("/list")
@@ -336,14 +445,19 @@ def upgrade(slug: str, release: str, namespace: str = "default", values_file: Op
     vf = values_file or str(base/"values.yaml")
     body={"user_id":"demo-user","kind":"helm.upgrade","params":{"release":release,"chart_dir":str(base),"namespace":namespace,"values_file":vf,"extra_opt":""},"execute": execute}
     j=_http_call("POST","/adapters/run", body)
-    return {"ok": bool(j.get("ok")),"reason": j.get("reason"),"cmd": j.get("cmd")}
+    return {"ok": bool(j.get("ok")), "reason": j.get("reason"), "cmd": j.get("cmd")}
 
 @router.get("/get")
 def get_template(slug: str):
     base=ROOT/slug
     if not base.exists(): raise HTTPException(404,"not found")
     files={}
-    for n in ("Chart.yaml","values.yaml","templates/_helpers.tpl","templates/deployment.yaml","templates/service.yaml","templates/hpa.yaml","templates/ingress.yaml","templates/servicemonitor.yaml","templates/networkpolicy.yaml","contract.json","README.md"):
+    for n in ("Chart.yaml","values.yaml",
+              "templates/_helpers.tpl","templates/deployment.yaml","templates/service.yaml",
+              "templates/hpa.yaml","templates/ingressclass.yaml","templates/ingress.yaml",
+              "templates/servicemonitor.yaml","templates/networkpolicy.yaml",
+              "templates/issuer.yaml","templates/certificate.yaml",
+              "contract.json","README.md"):
         p=base/n
         if p.exists(): files[str(n)] = p.read_text(encoding="utf-8")
     return {"ok": True, "files": files}

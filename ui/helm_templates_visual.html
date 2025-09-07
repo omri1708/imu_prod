@@ -85,7 +85,13 @@ $("#btn_create").onclick=async()=>{
       className: $("#ing_cls").value || null,
       host: $("#ing_host").value || null,
       path: $("#ing_path").value || "/",
-      tlsSecret: $("#ing_tls").value || null
+      tlsSecret: $("#ing_tls").value || null,
+      annotations: {}
+    },
+    ingressClass: {
+      enabled: $("#ing_on").value==="true" && !!$("#ing_cls").value,
+      name: $("#ing_cls").value || "nginx",
+      controller: "k8s.io/ingress-nginx"
     },
     serviceMonitor: {
       enabled: $("#sm_on").value==="true",
@@ -93,23 +99,37 @@ $("#btn_create").onclick=async()=>{
       interval: $("#sm_int").value || "30s",
       path: $("#sm_path").value || "/metrics",
       scheme: "http",
-      labels: {}
+      labels: {"release":"prom-operator"}
     },
     networkPolicy: {
       enabled: $("#np_on").value==="true",
+      profile: "standard",
       allowSameNamespace: $("#np_same").value==="true",
       ingressCidrs: ($("#np_in").value||"").split(",").map(s=>s.trim()).filter(Boolean),
       egressCidrs: ($("#np_out").value||"").split(",").map(s=>s.trim()).filter(Boolean)
+    },
+    certManager: {
+      enabled: ($("#ing_tls").value||"")!=="" && ($("#ing_host").value||"")!=="",
+      issuerKind: "Issuer",
+      issuerName: "selfsigned",
+      issuerNamespace: $("#ns").value,
+      certificateSecretName: $("#ing_tls").value || null,
+      dnsNames: [$("#ing_host").value||""].filter(Boolean)
     }
   };
   const j=await api('/helm/synth/create','POST',spec);
-  $("#out").textContent=JSON.stringify(j,null,2);
+  $("#out_create").textContent=JSON.stringify(j,null,2);
   $("#slug").value=j.slug||"";
 };
-
-$("#btn_list").onclick=async()=>{ const j=await api('/helm/synth/list'); $("#list").textContent=JSON.stringify(j,null,2); };
-$("#btn_render").onclick=async()=>{ const j=await api('/helm/synth/dry_template','POST',{"slug":$("#slug").value,"name":$("#rel2").value}); $("#ops").textContent=JSON.stringify(j,null,2); };
-$("#btn_upg").onclick=async()=>{ const j=await api('/helm/synth/upgrade','POST',{"slug":$("#slug").value,"release":$("#rel2").value,"namespace":$("#ns2").value,"execute":false}); $("#ops").textContent=JSON.stringify(j,null,2); };
+$("#btn_list").onclick=async()=>{
+  const j=await api('/helm/synth/list'); $("#list").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_render").onclick=async()=>{
+  const j=await api('/helm/synth/dry_template','POST',{"slug":$("#slug").value,"name":$("#rel2").value}); $("#ops").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_upg").onclick=async()=>{
+  const j=await api('/helm/synth/upgrade','POST',{"slug":$("#slug").value,"release":$("#rel2").value,"namespace":$("#ns2").value,"execute":false}); $("#ops").textContent=JSON.stringify(j,null,2);
+};
 </script>
 </body>
 </html>
