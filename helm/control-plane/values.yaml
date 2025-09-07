@@ -67,3 +67,11 @@ synthetics:
     url: "ws://{{ include \"cp.fullname\" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.wsPort }}/ws/wfq?topic=timeline"
     messages: 5
     interval_ms: 500
+
+prometheusRules:
+  enabled: true
+
+observability:
+  pushgateway:
+    enabled: false
+    url: ""    # דוגמה: http://pushgateway.monitoring.svc:9091

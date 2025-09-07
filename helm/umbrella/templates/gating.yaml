@@ -36,4 +36,10 @@
     {{- fail "Gating: certManager.acme.enabled=true requires non-empty certManager.email" }}
   {{- end }}
 {{- end }}
+{{/* Ingress enabled but ExternalDNS disabled ⇒ fail */}}
+{{- if and .Values.controlPlane.enabled (eq .Values.controlPlane.imu-control-plane.ingress.enabled true) }}
+  {{- if and .Values.gating.requireExternalDNSForIngress (not .Values.externalDNS.enabled) }}
+    {{- fail "Gating: ingress enabled but externalDNS is disabled (set externalDNS.enabled=true)" }}
+  {{- end }}
+{{- end }}
 {{- end }}

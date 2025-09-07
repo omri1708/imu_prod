@@ -4,8 +4,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "cp.fullname" . }}-grafana-dashboards
   namespace: {{ .Values.namespace }}
-  labels:
-    grafana_dashboard: "1"
+  labels: { grafana_dashboard: "1" }
 data:
   imu_api.json: |
 {{ (.Files.Get "monitoring/grafana/dashboards/imu_api.json" | indent 4) }}
@@ -13,4 +12,16 @@ data:
 {{ (.Files.Get "monitoring/grafana/dashboards/imu_ws.json" | indent 4) }}
   imu_scheduler.json: |
 {{ (.Files.Get "monitoring/grafana/dashboards/imu_scheduler.json" | indent 4) }}
+  imu_gatekeeper.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_gatekeeper.json" | indent 4) }}
+  imu_gate_trends.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_gate_trends.json" | indent 4) }}
+  imu_allowed_diffs.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_allowed_diffs.json" | indent 4) }}
+  imu_policy_drilldown.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_policy_drilldown.json" | indent 4) }}
+  imu_slo.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_slo.json" | indent 4) }}
+  imu_kind_smoke_slo.json: |
+{{ (.Files.Get "monitoring/grafana/dashboards/imu_kind_smoke_slo.json" | indent 4) }}
 {{- end }}

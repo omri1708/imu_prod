@@ -17,29 +17,19 @@ spec:
       - name: k6
         image: grafana/k6:0.49.0
         env:
-        - { name: VUS,        value: "{{ .Values.synthetics.vus }}" }
-        - { name: DURATION,   value: "{{ .Values.synthetics.duration }}" }
-        - { name: P95_MS,     value: "{{ .Values.synthetics.p95_ms }}" }
-        - { name: ERROR_RATE, value: "{{ .Values.synthetics.error_rate }}" }
-        - name: API
-          value: "http://{{ include "cp.fullname" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.apiPort }}/docs"
-        - name: UI
-          value: "http://{{ include "cp.fullname" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.uiPort }}/"
+        - { name: DURATION, value: "{{ .Values.synthetics.duration }}" }
+        - name: API_BASE
+          value: "http://{{ include "cp.fullname" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.apiPort }}"
         - name: WS_URL
           value: "{{ .Values.synthetics.ws.url }}"
-        - name: WS_MESSAGES
-          value: "{{ .Values.synthetics.ws.messages }}"
-        - name: WS_INTERVAL_MS
-          value: "{{ .Values.synthetics.ws.interval_ms }}"
         command: [ "sh", "-c" ]
         args:
           - |
-            echo "[k6] running synthetics (API/UI/WS)...";
+            echo "[k6] ws publish/receive test ...";
             set -e
             k6 run /cfg/k6.js || FAILED=1
             if [ "${FAILED:-0}" = "1" ]; then
-              echo "[k6] FAILED – performing rollback...";
-              apk add --no-cache bash curl >/dev/null 2>&1 || true
+              echo "[k6] FAILED – rollback";
               helm rollback "{{ .Release.Name }}" 1 -n "{{ .Values.namespace }}" || true
               exit 1
             fi

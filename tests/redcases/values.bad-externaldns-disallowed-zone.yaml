@@ -1,0 +1,15 @@
+externalDNS:
+  enabled: true
+  provider: "cloudflare"
+  domainFilters: [ "evil.com" ]  # מחוץ ל־allowedDNSZones
+
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    ingress:
+      enabled: true
+      className: "nginx"
+      host: "app.evil.com"        # גם host מחוץ ל־zone
+      tls:
+        - hosts: [ "app.evil.com" ]
+          secretName: "app-tls"

@@ -81,3 +81,26 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             ${GH_API}/repos/${{ github.repository }}/statuses/${SHA} \
             -d '{"state":"failure","context":"IMU/Umbrella-E2E","description":"umbrella CI failed"}' > /dev/null
+      
+      - name: Loki push (Conftest logs)
+        if: always()
+        env:
+          LOKI_URL: ${{ secrets.LOKI_URL }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$LOKI_URL" ]; then
+            for f in rendered-dev.yaml rendered-staging.yaml rendered-prod.yaml; do
+              OUT=$(conftest test "$f" -p policy/rego || true)
+              STATUS="pass"; echo "$OUT" | grep -q "FAIL" && STATUS="fail"
+              ts=$(date +%s%N)
+              cat <<EOF > /tmp/loki.json
+{
+ "streams": [{
+   "stream": { "job":"umbrella-e2e","repo":"$REPO","sha":"$SHA","file":"$f","status":"$STATUS" },
+   "values": [ ["$ts", $(printf %q "$OUT") ] ]
+ }]}
+EOF
+              curl -s -H "Content-Type: application/json" -X POST --data-binary @/tmp/loki.json "$LOKI_URL"/loki/api/v1/push >/dev/null || true
+            done
+          fi

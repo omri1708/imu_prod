@@ -47,3 +47,14 @@ gating:
   requireTLSForIngress: true
   requireCertManagerEmail: true
   requireExternalDNSProviderIn: [ "cloudflare", "aws", "google", "azure", "rfc2136" ]
+  requireExternalDNSForIngress: true
+
+loki:
+  enabled: false
+  lokiStack:
+    grafana: { enabled: false }
+    promtail:
+      enabled: true
+      config:
+        clients:
+          - url: http://loki:3100/loki/api/v1/push

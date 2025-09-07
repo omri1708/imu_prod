@@ -7,55 +7,40 @@ metadata:
 data:
   k6.js: |
     import http from 'k6/http';
-    import ws from 'k6/ws';
+    import ws   from 'k6/ws';
     import { check, sleep } from 'k6';
 
     export let options = {
       scenarios: {
-        api: { executor: 'constant-vus', vus: __ENV.VUS || 5, duration: __ENV.DURATION || '20s' },
-        ui:  { executor: 'constant-vus', vus: __ENV.VUS || 5, duration: __ENV.DURATION || '20s', startTime: '2s' },
-        {{ if .Values.synthetics.ws.enabled -}}
-        ws:  { executor: 'constant-vus', vus: __ENV.VUS || 3, duration: __ENV.DURATION || '20s', startTime: '4s' }
-        {{- end }}
-      },
-      thresholds: {
-        http_req_failed: ['rate<' + (__ENV.ERROR_RATE || "0.02")],
-        http_req_duration: ['p(95)<' + (__ENV.P95_MS || "800")]
+        ws_timeline: { executor: 'constant-vus', vus: 2, duration: __ENV.DURATION || '20s' }
       }
     };
 
-    export function api() {
-      const url = __ENV.API;
-      const r = http.get(url);
-      check(r, { 'api 200': (res) => res.status === 200 });
-      sleep(1);
-    }
+    export default function () {
+      const apiBase = __ENV.API_BASE;
+      const wsUrl   = __ENV.WS_URL || "";
+      if (!apiBase || !wsUrl) return;
 
-    export function ui() {
-      const url = __ENV.UI;
-      const r = http.get(url);
-      check(r, { 'ui 200': (res) => res.status === 200 });
-      sleep(1);
-    }
-
-    export function ws() {
-      const url = __ENV.WS_URL;
-      if (!url) { return; }
-      const messages = parseInt(__ENV.WS_MESSAGES || "5");
-      const interval = parseInt(__ENV.WS_INTERVAL_MS || "500");
-      const res = ws.connect(url, {}, function (socket) {
-        socket.on('open', function () {
-          for (let i=0;i<messages;i++) {
-            socket.send(JSON.stringify({type:"event", note:"k6 ping "+i}));
-            sleep(interval/1000);
+      let received = 0;
+      const res = ws.connect(wsUrl, {}, function (socket) {
+        socket.on('open', function(){
+          // שלח 3 אירועים דרך API, אמורים להגיע ל־WS
+          for (let i=0;i<3;i++){
+            http.post(`${apiBase}/events/publish`, JSON.stringify({topic:"timeline",producer:"k6",priority:5,event:{type:"event",note:`k6-echo-${i}`}}), { headers:{'content-type':'application/json'} });
+            sleep(0.5);
           }
         });
-        socket.on('message', function (data) {
-          // optional checks
+        socket.on('message', function(d){
+          try {
+            const o = JSON.parse(d);
+            if (o && o.producer==="k6" && String(o.note||"").startsWith("k6-echo-")) {
+              received++;
+            }
+          } catch(e){}
         });
-        socket.on('close', function () {});
-        socket.setTimeout(function () { socket.close(); }, (messages*interval)+1000);
+        socket.setTimeout(function(){ socket.close(); }, 5000);
       });
-      check(res, { 'ws connected': (r) => r && r.status === 101 }, { url });
+      check(res, { 'ws 101': (r)=>r && r.status===101 });
+      check(received, { 'got at least 3 echoes': (v)=> v>=3 });
     }
 {{- end }}

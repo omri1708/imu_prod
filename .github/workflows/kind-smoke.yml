@@ -1,0 +1,86 @@
+name: kind-smoke
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  kind-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with: { version: 'v3.14.4' }
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: imu
+          wait: true
+          wait_for_ready: true
+          node_image: kindest/node:v1.29.2
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with: { version: 'v1.29.2' }
+
+      - name: Helm deps (umbrella/control-plane)
+        run: |
+          helm dependency build helm/umbrella
+          helm dependency build helm/control-plane
+
+      - name: Smoke on Kind (control-plane)
+        env: { CLUSTER: imu, NS: dev, REL: imu }
+        run: |
+          chmod +x scripts/smoke_kind_ci.sh
+          START=$(date +%s)
+          set +e
+          ./scripts/smoke_kind_ci.sh
+          RC=$?
+          set -e
+          DURATION=$(( $(date +%s) - START ))
+          echo "rc=${RC}" > smoke.rc
+          echo "duration=${DURATION}" > smoke.duration
+
+      - name: Push metrics/logs
+        if: always()
+        env:
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+          LOKI_URL: ${{ secrets.LOKI_URL }}
+          SHA: ${{ env.SHA }}
+          REPO: ${{ env.REPO }}
+        run: |
+          chmod +x scripts/ci_metrics.sh
+          RC=$(cat smoke.rc | sed 's/rc=//')
+          DUR=$(cat smoke.duration | sed 's/duration=//')
+          STATUS=$([ "$RC" -eq 0 ] && echo "pass" || echo "fail")
+          ./scripts/ci_metrics.sh metric kind_smoke "repo=${REPO},sha=${SHA},status=${STATUS}" imu_kind_smoke_pass $([ "$RC" -eq 0 ] && echo 1 || echo 0)
+          ./scripts/ci_metrics.sh metric kind_smoke "repo=${REPO},sha=${SHA}" imu_kind_smoke_duration_seconds ${DUR}
+          ./scripts/ci_metrics.sh log "job=kind_smoke,repo=${REPO},sha=${SHA},status=${STATUS}" "Kind smoke ${STATUS}, duration=${DUR}s"
+
+      - name: Port-forward API & WS
+        if: always()
+        run: |
+          kubectl -n dev port-forward svc/imu-control-plane-imu-svc 8000:8000 8766:8766 >/tmp/pf.log 2>&1 &
+          echo $! > /tmp/pf.pid
+          sleep 3
+
+      - name: WS Synthetic (publish→receive)
+        if: always()
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3-pip
+          python3 -m pip install websockets
+          chmod +x scripts/ws_synthetic_ci.py
+          API_BASE=http://127.0.0.1:8000 \
+          WS_URL=ws://127.0.0.1:8766/ws/wfq?topic=timeline \
+          ./scripts/ws_synthetic_ci.py
+        finally: |
+          kill $(cat /tmp/pf.pid) || true

@@ -36,3 +36,38 @@ jobs:
 
       - name: Diff staging vs prod
         run: python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml scripts/allowed_diffs.yaml
+
+      - name: Diff dev vs staging
+        run: python scripts/diff_umbrella.py rendered-dev.yaml rendered-staging.yaml scripts/allowed_diffs.yaml dev staging
+      
+      - name: Diff staging vs prod
+        run: python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml scripts/allowed_diffs.yaml staging prod
+      
+      - name: Diff dev vs staging
+        run: |
+          set +e
+          python scripts/diff_umbrella.py rendered-dev.yaml rendered-staging.yaml scripts/allowed_diffs.yaml dev staging
+          rc=$?
+          echo "$rc" > devstaging.rc
+          exit $rc
+      - name: Diff staging vs prod
+        run: |
+          set +e
+          python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml scripts/allowed_diffs.yaml staging prod
+          rc=$?
+          echo "$rc" > stagingprod.rc
+          exit $rc
+      - name: Push allowed-diffs metric (optional Pushgateway)
+        if: always()
+        run: |
+          if [ -n "${{ secrets.PUSHGATEWAY_URL }}" ]; then
+            ds=$(cat devstaging.rc 2>/dev/null || echo 0); [ "$ds" -ne 0 ] && DS_VAL=1 || DS_VAL=0
+            sp=$(cat stagingprod.rc 2>/dev/null || echo 0); [ "$sp" -ne 0 ] && SP_VAL=1 || SP_VAL=0
+            for pair in dev_staging:$DS_VAL staging_prod:$SP_VAL; do
+              p="${pair%%:*}"; v="${pair##*:}"
+              cat <<EOF | curl -s --data-binary @- "${{ secrets.PUSHGATEWAY_URL }}/metrics/job/umbrella_diff/pair/${p}"
+# TYPE imu_allowed_diffs_unexpected_total gauge
+imu_allowed_diffs_unexpected_total{pair="${p}"} ${v}
+EOF
+            done
+          fi

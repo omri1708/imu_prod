@@ -1,0 +1,15 @@
+externalDNS:
+  enabled: true
+  provider: "unknown"        # לא מאושר לפי requireExternalDNSProviderIn
+  domainFilters: [ "yourcompany.com" ]
+
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    ingress:
+      enabled: true
+      className: "nginx"
+      host: "app.yourcompany.com"
+      tls:
+        - hosts: [ "app.yourcompany.com" ]
+          secretName: "app-tls"
