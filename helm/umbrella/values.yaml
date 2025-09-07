@@ -1,37 +1,49 @@
-# Global namespace reference (can be overridden per env)
 namespace: default
 
 controlPlane:
   enabled: true
-  # Pass-through values to the subchart (control-plane)
   imu-control-plane:
     namespace: "{{ .Values.namespace }}"
-    dashboards:
-      enabled: true
-    hpa:
-      enabled: true
-      api: { min: 1, max: 5, cpu: 75 }
-      ws:  { min: 1, max: 5, cpu: 75 }
-    networkPolicy:
-      enabled: true
-      profile: standard
+    dashboards: { enabled: true }
 
 monitoring:
   enabled: true
-  kube-prometheus-stack:
-    grafana:
-      sidecar:
-        dashboards:
-          enabled: true
-          label: grafana_dashboard
-          searchNamespace: ALL
-      defaultDashboardsEnabled: false
-    prometheus:
-      prometheusSpec:
-        serviceMonitorSelectorNilUsesHelmValues: false
 
 gatekeeper:
   enabled: true
-  gatekeeper:
-    auditInterval: 30
-    enableDeleteOperations: true
+
+ingressNginx:
+  enabled: true
+  controller:
+    service:
+      type: LoadBalancer
+
+certManager:
+  enabled: true
+  installCRDs: true
+  email: "acme@example.com"          # נדרש ע"י gating אם ACME מופעל
+  acme:
+    enabled: true                    # אם true — נדרוש email לא ריק
+    server: "https://acme-v02.api.letsencrypt.org/directory"
+    solver: http01                   # או dns01 (ואז נדרוש גם dns provider)
+    dns01:
+      provider: ""                   # אם dns01 — נדרוש provider לא ריק
+
+externalDNS:
+  enabled: true
+  provider: "cloudflare"             # או aws / google / azure / rfc2136
+  domainFilters: [ "yourcompany.com" ]
+  txtOwnerId: "imu"
+  policy: "sync"
+  serviceAccount:
+    create: true
+    name: ""
+
+# --- Policy Gating (כאן מגדירים מה מותר) ---
+gating:
+  enabled: true
+  allowedIngressClasses: [ "nginx" ]
+  allowedDNSZones: [ "yourcompany.com" ]
+  requireTLSForIngress: true
+  requireCertManagerEmail: true
+  requireExternalDNSProviderIn: [ "cloudflare", "aws", "google", "azure", "rfc2136" ]

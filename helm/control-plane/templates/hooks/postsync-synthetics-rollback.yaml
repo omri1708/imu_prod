@@ -1,0 +1,56 @@
+{{- if .Values.synthetics.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cp.fullname" . }}-postsync-k6
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ include "cp.fullname" . }}-sa
+      restartPolicy: Never
+      containers:
+      - name: k6
+        image: grafana/k6:0.49.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - { name: VUS,        value: "{{ .Values.synthetics.vus }}" }
+        - { name: DURATION,   value: "{{ .Values.synthetics.duration }}" }
+        - { name: P95_MS,     value: "{{ .Values.synthetics.p95_ms }}" }
+        - { name: ERROR_RATE, value: "{{ .Values.synthetics.error_rate }}" }
+        - name: API
+          value: "http://{{ include "cp.fullname" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.apiPort }}/docs"
+        - name: UI
+          value: "http://{{ include "cp.fullname" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.uiPort }}/"
+        command: [ "sh", "-c" ]
+        args:
+          - |
+            echo "[k6] running synthetics ...";
+            k6 run /scripts/k6.js
+      volumes: []
+      initContainers:
+      - name: load-script
+        image: alpine:3.19
+        command: [ "sh", "-c" ]
+        args:
+          - |
+            mkdir -p /scripts && \
+            wget -qO /scripts/k6.js http://{{ include "cp.fullname" . }}-k6.{{ .Values.namespace }}.svc.cluster.local:80 2>/dev/null || \
+            cp /config/k6.js /scripts/k6.js
+        volumeMounts:
+        - name: tmp-scripts
+          mountPath: /scripts
+        - name: cfg
+          mountPath: /config
+      volumes:
+      - name: tmp-scripts
+        emptyDir: {}
+      - name: cfg
+        configMap:
+          name: {{ include "cp.fullname" . }}-k6
+  backoffLimit: 0
+{{- end }}

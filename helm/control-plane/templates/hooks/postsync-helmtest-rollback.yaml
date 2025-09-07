@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cp.fullname" . }}-postsync-test
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ include "cp.fullname" . }}-sa
+      restartPolicy: Never
+      containers:
+      - name: helm-test
+        image: alpine/helm:3.14.4
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: RELEASE
+          value: "{{ .Release.Name }}"
+        - name: NAMESPACE
+          valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+        - name: GITHUB_REPO
+          value: "{{ .Values.github.repo | default "" }}"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "cp.fullname" . }}-github || "missing"
+              key: token
+              optional: true
+        command: [ "sh", "-c" ]
+        args:
+          - |
+            echo "[postsync] running helm test for $RELEASE in $NAMESPACE...";
+            set -e
+            if helm test "$RELEASE" -n "$NAMESPACE"; then
+              echo "[postsync] helm test passed";
+              if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO" ]; then
+                SHA=$(kubectl get cm -n "$NAMESPACE" -l owner=helm,name="$RELEASE",status=deployed -o jsonpath='{.items[0].data.release}' 2>/dev/null | base64 -d | sed -n 's/.*"chart_metadata":.*//p' >/dev/null || true)
+                curl -sS -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+                  https://api.github.com/repos/$GITHUB_REPO/statuses/${SHA:-HEAD} \
+                  -d '{"state":"success","context":"IMU/Helm-Test","description":"helm test passed"}' >/dev/null || true
+              fi
+              exit 0
+            else
+              echo "[postsync] helm test FAILED, attempting rollback...";
+              helm rollback "$RELEASE" 1 -n "$NAMESPACE" || true
+              if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO" ]; then
+                curl -sS -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+                  https://api.github.com/repos/$GITHUB_REPO/statuses/HEAD \
+                  -d '{"state":"failure","context":"IMU/Helm-Test","description":"helm test failed - rollback issued"}' >/dev/null || true
+              fi
+              exit 1
+            fi

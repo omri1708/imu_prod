@@ -1,27 +1,38 @@
 apiVersion: v2
 name: imu-umbrella
-description: Umbrella chart for IMU (control-plane + monitoring + gatekeeper)
+description: Umbrella chart for IMU (control-plane + monitoring + gatekeeper + ingress + cert-manager + external-dns)
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0.0"
 
 dependencies:
-  # Local subchart (our control-plane)
   - name: imu-control-plane
     alias: control-plane
     version: 0.1.0
     repository: "file://../control-plane"
     condition: controlPlane.enabled
 
-  # kube-prometheus-stack (monitoring)
   - name: kube-prometheus-stack
     version: 58.3.3
     repository: "https://prometheus-community.github.io/helm-charts"
     condition: monitoring.enabled
 
-  # Gatekeeper (OPA)
   - name: gatekeeper
     version: 3.16.0
     repository: "https://open-policy-agent.github.io/gatekeeper/charts"
     condition: gatekeeper.enabled
 
+  - name: ingress-nginx
+    version: 4.10.0
+    repository: "https://kubernetes.github.io/ingress-nginx"
+    condition: ingressNginx.enabled
+
+  - name: cert-manager
+    version: v1.14.4
+    repository: "https://charts.jetstack.io"
+    condition: certManager.enabled
+
+  - name: external-dns
+    version: 1.14.5
+    repository: "https://kubernetes-sigs.github.io/external-dns/"
+    condition: externalDNS.enabled

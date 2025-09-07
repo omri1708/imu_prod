@@ -1,0 +1,28 @@
+{{- if .Values.synthetics.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cp.fullname" . }}-k6
+  namespace: {{ .Values.namespace }}
+data:
+  k6.js: |
+    import http from 'k6/http';
+    import { sleep, check } from 'k6';
+    export let options = {
+      vus: parseInt(__ENV.VUS || "5"),
+      duration: __ENV.DURATION || "20s",
+      thresholds: {
+        http_req_failed: ['rate<' + (__ENV.ERROR_RATE || "0.02") ],
+        http_req_duration: ['p(95)<' + (__ENV.P95_MS || "800") ]
+      }
+    };
+    export default function () {
+      const api = __ENV.API;
+      const ui  = __ENV.UI;
+      let r1 = http.get(api);
+      check(r1, { 'api 200': (r) => r.status === 200 });
+      let r2 = http.get(ui);
+      check(r2, { 'ui 200': (r) => r.status === 200 });
+      sleep(1);
+    }
+{{- end }}

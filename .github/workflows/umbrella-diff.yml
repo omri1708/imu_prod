@@ -1,0 +1,32 @@
+name: umbrella-diff
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install pyyaml
+
+      - name: Setup helm
+        uses: azure/setup-helm@v4
+        with: { version: 'v3.14.4' }
+
+      - name: Render umbrella (dev/staging/prod)
+        run: |
+          helm template imu helm/umbrella -n dev     -f helm/umbrella/values.yaml -f helm/umbrella/values.dev.yaml     > rendered-dev.yaml
+          helm template imu helm/umbrella -n staging -f helm/umbrella/values.yaml -f helm/umbrella/values.staging.yaml > rendered-staging.yaml
+          helm template imu helm/umbrella -n prod    -f helm/umbrella/values.yaml -f helm/umbrella/values.prod.yaml    > rendered-prod.yaml
+
+      - name: Diff dev vs staging
+        run: python scripts/diff_umbrella.py rendered-dev.yaml rendered-staging.yaml
+
+      - name: Diff staging vs prod
+        run: python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml

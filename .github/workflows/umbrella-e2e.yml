@@ -1,0 +1,83 @@
+name: umbrella-e2e
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GH_API: https://api.github.com
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) set GitHub status: pending
+      - name: Set commit status (pending)
+        if: always()
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            ${GH_API}/repos/${{ github.repository }}/statuses/${SHA} \
+            -d '{"state":"pending","context":"IMU/Umbrella-E2E","description":"umbrella CI running"}' > /dev/null
+
+      # 2) Helm, kubeconform, conftest
+      - name: Setup helm
+        uses: azure/setup-helm@v4
+        with: { version: 'v3.14.4' }
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLO https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform-linux-amd64.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Install conftest
+        run: |
+          curl -sSLo conftest.tar.gz https://github.com/open-policy-agent/conftest/releases/download/v0.53.0/conftest_0.53.0_Linux_x86_64.tar.gz
+          tar xzf conftest.tar.gz conftest
+          sudo mv conftest /usr/local/bin/
+
+      - name: Render umbrella (dev)
+        run: helm template imu helm/umbrella -n dev -f helm/umbrella/values.yaml -f helm/umbrella/values.dev.yaml > rendered-dev.yaml
+
+      - name: Render umbrella (staging)
+        run: helm template imu helm/umbrella -n staging -f helm/umbrella/values.yaml -f helm/umbrella/values.staging.yaml > rendered-staging.yaml
+
+      - name: Render umbrella (prod)
+        run: helm template imu helm/umbrella -n prod -f helm/umbrella/values.yaml -f helm/umbrella/values.prod.yaml > rendered-prod.yaml
+
+      - name: Kubeconform validate
+        run: |
+          set -e
+          kubeconform -strict -summary -ignore-missing-schemas rendered-dev.yaml
+          kubeconform -strict -summary -ignore-missing-schemas rendered-staging.yaml
+          kubeconform -strict -summary -ignore-missing-schemas rendered-prod.yaml
+
+      - name: Conftest OPA policies (ExternalDNS/Ingress)
+        run: |
+          set -e
+          conftest test rendered-dev.yaml -p policy/rego
+          conftest test rendered-staging.yaml -p policy/rego
+          conftest test rendered-prod.yaml -p policy/rego
+
+      # 3) set GitHub status: success/failure
+      - name: Set commit status (success)
+        if: success()
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            ${GH_API}/repos/${{ github.repository }}/statuses/${SHA} \
+            -d '{"state":"success","context":"IMU/Umbrella-E2E","description":"umbrella CI passed"}' > /dev/null
+
+      - name: Set commit status (failure)
+        if: failure()
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            ${GH_API}/repos/${{ github.repository }}/statuses/${SHA} \
+            -d '{"state":"failure","context":"IMU/Umbrella-E2E","description":"umbrella CI failed"}' > /dev/null
