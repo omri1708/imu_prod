@@ -1,0 +1,21 @@
+{{- if and .Values.gating.enabled .Values.alertmanager.enabled }}
+  {{- $receivers := (pluck "receivers" .Values.alertmanager.config | first) | default list }}
+
+  {{- if and .Values.gating.alerts.requireSlackWebhook (gt (len (where $receivers "name" "slack")) 0) }}
+    {{- if or (not .Values.alerts.slack) (eq .Values.alerts.slack.webhook "") }}
+      {{- fail "Gating: Slack receiver requires alerts.slack.webhook" }}
+    {{- end }}
+  {{- end }}
+
+  {{- if and .Values.gating.alerts.requireTeamsWebhook (gt (len (where $receivers "name" "pager")) 0) }}
+    {{- if or (not .Values.alerts.teams) (eq .Values.alerts.teams.webhook "") }}
+      {{- fail "Gating: Pager (Teams) requires alerts.teams.webhook" }}
+    {{- end }}
+  {{- end }}
+
+  {{- if and .Values.gating.alerts.requireEmailFields (gt (len (where $receivers "name" "pager")) 0) }}
+    {{- if or (not .Values.alerts.email) (eq .Values.alerts.email.to "") (eq .Values.alerts.email.from "") (eq .Values.alerts.email.smarthost "") }}
+      {{- fail "Gating: Pager (Email) requires non-empty alerts.email.{to,from,smarthost}" }}
+    {{- end }}
+  {{- end }}
+{{- end }}

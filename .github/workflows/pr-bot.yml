@@ -1,0 +1,36 @@
+name: pr-bot
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: [ "umbrella-e2e", "umbrella-diff", "umbrella-redcases", "kind-smoke", "umbrella-kind-smoke" ]
+    types: [completed]
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose comment
+        id: compose
+        env:
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+          ARGO_URL:    ${{ secrets.ARGO_URL }}
+          SHA:         ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          G="${GRAFANA_URL:-https://grafana.example.com}"
+          A="${ARGO_URL:-https://argocd.example.com}"
+          cat > /tmp/comment.md <<EOF
+**IMU CI Summary**
+
+• ✅ CI checks: e2e / diff / redcases / kind-smoke  
+• 📊 Grafana: [SLO](${G}/d/imu_slo) • [Gate](${G}/d/imu_gatekeeper) • [Diffs](${G}/d/imu_allowed_diffs) • [Kind](${G}/d/imu_kind_smoke_slo)  
+• 🚀 ArgoCD: [Dashboard](${A})
+
+_Commit:_ ${SHA}
+EOF
+      - name: Post comment
+        env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        run: |
+          PR=${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
+          gh api repos/${{ github.repository }}/issues/${PR}/comments -f body=@/tmp/comment.md
