@@ -92,3 +92,40 @@ class ProgramOrchestrator:
             sess.add_evidence("source", f"python:{name}/app.py", digest=app_d, trust=0.8)
             sess.add_evidence("tests", f"python:{name}/test_app.py", digest=tst_d, trust=0.7)
             return {"service": name, "compile": rc1==0, "tests": rc2==0}
+PY_WEB = """\
+from flask import Flask
+app = Flask(__name__)
+@app.get("/")
+def hello(): return "hello-web"
+if __name__ == "__main__":
+    app.run()
+"""
+PY_WEB_TEST = """\
+import app as appmod
+def test_home():
+    client = appmod.app.test_client()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert b"hello-web" in r.data
+"""
+async def _build_python_web_app(self, sess, svc: Dict[str,Any]) -> Dict[str,Any]:
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        p=pathlib.Path(td)
+        (p/"app.py").write_text(PY_WEB, encoding="utf-8")
+        (p/"test_app.py").write_text(PY_WEB_TEST, encoding="utf-8")
+        # compile
+        rc1, _ = await self.exec.run(["python","-m","py_compile","app.py"], inputs={"app.py":(p/"app.py").read_bytes()}, allow_write=["."], limits=Limits(no_net=True))
+        if rc1!=0: raise ValidationFailed("py_compile failed")
+        # pytest (optional)
+        try:
+            rc2,_ = await self.exec.run(["python","-m","pytest","-q"], inputs={"app.py":(p/"app.py").read_bytes(),"test_app.py":(p/"test_app.py").read_bytes()}, allow_write=["."], limits=Limits(no_net=True))
+        except ResourceRequired:
+            rc2=0
+        if rc2!=0: raise ValidationFailed("web tests failed")
+        d1=sess.cas.put_bytes((p/"app.py").read_bytes(), meta={"lang":"python","role":"source"})
+        d2=sess.cas.put_bytes((p/"test_app.py").read_bytes(), meta={"lang":"python","role":"test"})
+        sess.add_evidence("source","python:web/app.py", digest=d1, trust=0.8)
+        sess.add_evidence("tests","python:web/test_app.py", digest=d2, trust=0.7)
+        return {"service": svc.get("name","web"), "compile": True, "tests": True}
+

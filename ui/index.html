@@ -1,179 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8"/>
-<title>IMU UI-DSL Live</title>
+<title>IMU – שיחה</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, sans-serif; margin: 0; background: #0b1020; color: #e6edf3; }
-header { padding: 12px 16px; background: #11162a; border-bottom: 1px solid #1f2a44; display:flex; align-items:center; gap:12px; }
-.badge { background:#243152; padding:2px 8px; border-radius:999px; font-size:12px; color:#9fb7ff; border:1px solid #355; }
-main { display:grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 54px); }
-aside { border-right: 1px solid #1f2a44; padding:12px; }
-section { padding:16px; }
-.card { background:#12172d; border:1px solid #233259; border-radius:10px; padding:12px; margin-bottom:12px; }
-.progress { height: 8px; background:#1a2240; border-radius:999px; overflow:hidden; }
-.progress > div { height:100%; width:0%; background:linear-gradient(90deg,#4ea1ff,#7cf); transition: width .25s ease; }
-.timeline { max-height: 50vh; overflow:auto; }
-.row { display:flex; align-items:center; gap:8px; }
-label { display:block; font-size:12px; color:#8ea2d8; }
-input, select, button, textarea { background:#0e1630; border:1px solid #233259; color:#e6edf3; border-radius:8px; padding:8px; font-size:14px; }
-input:focus, select:focus, textarea:focus { outline:none; border-color:#4ea1ff; box-shadow:0 0 0 2px #4ea1ff33; }
-kbd { background:#0e1630; border:1px solid #233259; padding:2px 6px; border-radius:6px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
-.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; background:#0e1630; padding:6px 8px; border-radius:8px; border:1px solid #233259; }
-.grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; }
+:root{--bg:#0b1020;--ink:#e6edf3;--panel:#12172d;--line:#233259;--me:#4ea1ff;--bot:#26c281}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif}
+header{padding:10px 14px;border-bottom:1px solid var(--line)}
+main{max-width:880px;margin:0 auto;padding:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.msg{margin:10px 0;padding:10px;border-radius:10px;white-space:pre-wrap}
+.me{background:rgba(78,161,255,0.15);border:1px solid rgba(78,161,255,0.4)}
+.bot{background:rgba(38,194,129,0.1);border:1px solid rgba(38,194,129,0.4)}
+.row{display:flex;gap:8px;margin-top:8px}
+input,button{padding:10px;border-radius:8px;border:1px solid var(--line);background:#0e1630;color:var(--ink)}
+input{flex:1} button{background:var(--me);color:#001b3f;font-weight:700;cursor:pointer}
+small{opacity:.7}
 </style>
 </head>
 <body>
-<header>
-  <strong>IMU Console</strong>
-  <span class="badge">WS live</span>
-  <span id="ws_state" class="badge" style="color:#aaa">connecting…</span>
-  <a class="badge" href="/ui/metrics.html" style="text-decoration:none">metrics</a>
-  <a class="badge" href="/ui/runbook.html" style="text-decoration:none">runbook</a>
-  <a class="badge" href="/ui/sbom.html" style="text-decoration:none">sbom</a>
-  <a class="badge" href="/ui/keys.html" style="text-decoration:none">keys</a>
-  <a class="badge" href="/ui/bundles.html" style="text-decoration:none">bundles</a>  
-  <a class="badge" href="/ui/gitops.html" style="text-decoration:none">gitops</a>
-  <a class="badge" href="/ui/replay.html" style="text-decoration:none">replay</a>
-  <a class="badge" href="/ui/gitops_guard.html" style="text-decoration:none">gitops-guard</a>
-  <a class="badge" href="/ui/policy_live.html" style="text-decoration:none">policy</a>
-  <a class="badge" href="/ui/webhooks_console.html" style="text-decoration:none">webhooks</a>
-  <a class="badge" href="/ui/canary.html" style="text-decoration:none">canary</a>
-  <a class="badge" href="/ui/auto_canary.html" style="text-decoration:none">auto-canary</a>
-  <a class="badge" href="/ui/gatekeeper.html" style="text-decoration:none">gatekeeper</a>
-  <a class="badge" href="/ui/timeline_filters.html" style="text-decoration:none">timeline-filters</a>
-  <a class="badge" href="/ui/scheduler.html" style="text-decoration:none">scheduler</a>
-  <a class="badge" href="/ui/jobs_dashboard.html" style="text-decoration:none">jobs</a>
-  <a class="badge" href="/ui/synth.html" style="text-decoration:none">synth</a>
-  <a class="badge" href="/ui/synth_examples.html" style="text-decoration:none">synth-examples</a>
-  <a class="badge" href="/ui/synth_wizard.html" style="text-decoration:none">synth-wizard</a>
-  <a class="badge" href="/ui/k8s_templates.html" style="text-decoration:none">k8s-templates</a>
-  <a class="badge" href="/ui/helm_templates.html" style="text-decoration:none">helm-templates</a>
-  <a class="badge" href="/ui/helm_templates_visual.html" style="text-decoration:none">helm-visual</a>
-  <a class="badge" href="/ui/deploy_control_plane.html" style="text-decoration:none">deploy-cp</a>
-  <a class="badge" href="/ui/emergency.html" style="text-decoration:none">emergency</a>
-</header>
+<header><strong>IMU – ממשק שיחה אחד</strong></header>
 <main>
-  <aside>
-    <div class="card">
-      <h3>Run Adapter (dry-run)</h3>
-      <label>Kind</label>
-      <select id="kind">
-        <option>unity.build</option>
-        <option>android.gradle</option>
-        <option>ios.xcode</option>
-        <option>k8s.kubectl.apply</option>
-        <option>cuda.nvcc</option>
-      </select>
-      <label>Params (JSON)</label>
-      <textarea id="params" rows="8">{ "project": "/path/to/UnityProj", "target":"Android", "method":"Builder.PerformBuild", "version":"2022.3.44f1", "log": "/tmp/unity.log" }</textarea>
-      <div class="row">
-        <button id="btn_dry">Dry-Run</button>
-        <button id="btn_exec">Execute</button>
-      </div>
-      <pre class="code" id="cmd_out"># command will appear here</pre>
-      <div class="progress"><div id="prog_bar"></div></div>
-    </div>
-
-    <div class="card">
-      <h3>Capability Request</h3>
-      <label>Capability ID</label>
-      <input id="cap_id" value="unity.hub"/>
-      <button id="btn_cap">Get Install Command</button>
-      <pre class="code" id="cap_out"># command will appear here</pre>
-    </div>
-  </aside>
-
-  <section>
-    <div class="card">
-      <h3>Live Timeline</h3>
-      <div class="timeline" id="timeline"></div>
-    </div>
-    <div class="card">
-      <h3>Policy</h3>
-      <pre class="code" id="policy_dump"></pre>
-    </div>
-  </section>
+  <div id="log" class="panel" style="min-height:340px"></div>
+  <div class="row">
+    <input id="user" placeholder="user_id" value="demo-user" style="max-width:160px">
+    <input id="msg" placeholder="כתוב חופשי. אני אשאל אם חסר משהו.">
+    <button id="send">שלח</button>
+  </div>
+  <small>דוגמאות: “אני רוצה אפליקציה פשוטה לניהול משימות”, “תענה על סמך https://example.com למה זה קורה”.</small>
 </main>
-
 <script>
-const $ = sel => document.querySelector(sel);
-
-function appendEvent(evt) {
-  const host = $("#timeline");
-  const div = document.createElement('div');
-  div.className = 'row';
-  div.innerHTML = `<span class="badge">${new Date(evt.ts*1000).toLocaleTimeString()}</span>
-                   <span>${evt.kind || evt.type}</span>
-                   <span class="code">${evt.msg || ""}</span>`;
-  host.prepend(div);
+const $=s=>document.querySelector(s);
+function add(type,el){ const d=document.createElement('div'); d.className='msg '+type; d.appendChild(el); $('#log').appendChild(d); $('#log').scrollTop=1e9; }
+function span(t){ const s=document.createElement('span'); s.textContent=t; return s; }
+async function send(){
+  const user=$('#user').value||'user', msg=$('#msg').value||''; if(!msg.trim()) return;
+  add('me', span(msg)); $('#msg').value='';
+  const r=await fetch('/chat/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({user_id:user,message:msg})});
+  const j=await r.json().catch(()=>({ok:false,text:'שגיאה'}));
+  const box=document.createElement('div'); const t=document.createElement('div'); t.textContent=j.text||''; box.appendChild(t);
+  if (j.extra){ const pre=document.createElement('pre'); pre.textContent=JSON.stringify(j.extra,null,2); box.appendChild(pre); }
+  add('bot', box);
 }
-
-function setProgress(pct) {
-  $("#prog_bar").style.width = Math.max(0, Math.min(100, pct)) + "%";
-}
-
-async function fetchPolicy() {
-  const r = await fetch('/api/policy/network/demo-user');
-  if (r.ok) {
-    const j = await r.json();
-    $("#policy_dump").textContent = JSON.stringify(j, null, 2);
-  }
-}
-
-async function dryRun(execute=false) {
-  try {
-    const kind = $("#kind").value;
-    const params = JSON.parse($("#params").value);
-    const r = await fetch('/adapters/' + (execute ? 'run' : 'dry_run'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ user_id: 'demo-user', kind, params, execute })
-    });
-    const j = await r.json();
-    $("#cmd_out").textContent = JSON.stringify(j, null, 2);
-    if (j.ok) { appendEvent({ ts: Date.now()/1000, kind:'dry-run', msg: j.cmd }); }
-    else { appendEvent({ ts: Date.now()/1000, kind:'blocked', msg: j.reason }); }
-  } catch (e) {
-    $("#cmd_out").textContent = 'error: ' + e;
-  }
-}
-
-async function requestCapability() {
-  const cap = $("#cap_id").value;
-  const r = await fetch('/capabilities/request', {
-    method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({ user_id: 'demo-user', capability: cap })
-  });
-  const j = await r.json();
-  $("#cap_out").textContent = JSON.stringify(j, null, 2);
-  appendEvent({ ts: Date.now()/1000, kind:'capability', msg: j.command || j.error });
-}
-
-$("#btn_dry").onclick = () => dryRun(false);
-$("#btn_exec").onclick = () => dryRun(true);
-$("#btn_cap").onclick = requestCapability;
-
-fetchPolicy();
-
-// WebSocket live updates
-(function connectWS(){
-  try {
-    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host.replace(/:\d+/, ':8765'));
-    $("#ws_state").textContent = 'connecting…';
-    ws.onopen = () => { $("#ws_state").textContent = 'connected'; ws.send(JSON.stringify({type:'hello'})); };
-    ws.onclose = () => { $("#ws_state").textContent = 'disconnected'; setTimeout(connectWS, 1500); };
-    ws.onmessage = (ev) => {
-      const evt = JSON.parse(ev.data);
-      if (evt.type === 'progress') setProgress(evt.pct || 0);
-      appendEvent({...evt, ts: evt.ts || Date.now()/1000});
-    };
-  } catch (e) {
-    $("#ws_state").textContent = 'error';
-  }
-})();
+$('#send').onclick=send;
+$('#msg').addEventListener('keydown',e=>{ if(e.key==='Enter') send(); });
 </script>
 </body>
 </html>

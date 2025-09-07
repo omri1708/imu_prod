@@ -1,0 +1,18 @@
+{
+  "_ts": 1757250850.608514,
+  "provider": "http",
+  "url": "https://example.com",
+  "headers": {
+    "Accept-Ranges": "bytes",
+    "Content-Type": "text/html",
+    "ETag": "\"84238dfc8092e5d9c0dac8ef93371a07:1736799080.121134\"",
+    "Last-Modified": "Mon, 13 Jan 2025 20:11:20 GMT",
+    "Vary": "Accept-Encoding",
+    "Content-Encoding": "gzip",
+    "Content-Length": "648",
+    "Cache-Control": "max-age=86000",
+    "Date": "Sun, 07 Sep 2025 13:14:10 GMT",
+    "Alt-Svc": "h3=\":443\"; ma=93600,h3-29=\":443\"; ma=93600",
+    "Connection": "keep-alive"
+  }
+}
