@@ -62,9 +62,9 @@ next_phase_trace:
 
 .PHONY: test-auto
 test-auto:
-	python -m imu_repo.engine.testgen.runtime_cases
-	python -m imu_repo.engine.testgen.kpi_cases
-	python -m imu_repo.tools.test_orchestrator
+	python -m engine.testgen.runtime_cases
+	python -m engine.testgen.kpi_cases
+	python -m tools.test_orchestrator
 
 .PHONY: phase_audit
 phase_audit:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio, json, time, urllib.parse
 from websockets.server import serve, WebSocketServerProtocol
 from typing import Dict, Any
-from .stream_wfq import BROKER
+from server.stream_wfq import BROKER
 
 HELLO = {"type":"hello","msg":"wfq-broker-online"}
 

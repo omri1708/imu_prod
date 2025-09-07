@@ -1,0 +1,29 @@
+services:
+  ws:
+    build:
+      context: .
+      dockerfile: docker/ws/Dockerfile
+    command: python -m server.stream_wfq_ws
+    ports:
+      - "8766:8766"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/prod/api/Dockerfile
+    environment:
+      WS_URL: ws://ws:8766
+      IMU_STATE_DIR: /tmp/imu_state
+      IMU_KEYS_PATH: /tmp/imu_keys
+      PYTHONPATH: /app:/usr/local/lib/python3.11/site-packages
+    depends_on:
+      - ws
+    ports:
+      - "8000:8000"
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui/Dockerfile
+    ports:
+      - "8080:80"

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 import time
 
-from .stream_wfq import BROKER
+from server.stream_wfq import BROKER
 
 router = APIRouter(prefix="/events", tags=["events"])
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 from typing import Dict, Any
 import threading, time
-from .stream_wfq import BROKER
-from .stream_wfq_stats import broker_stats
+from server.stream_wfq import BROKER
+from server.stream_wfq_stats import broker_stats
 
 _ADJUST_STOP=False
 _THREAD=None

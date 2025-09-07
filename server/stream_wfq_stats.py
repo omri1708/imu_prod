@@ -2,7 +2,7 @@
 # כלי עזר לסטטיסטיקות מתוך WFQBroker — בלי לשנות את המחלקה עצמה.
 from __future__ import annotations
 from typing import Dict, Any
-from .stream_wfq import BROKER
+from server.stream_wfq import BROKER
 
 def broker_stats() -> Dict[str, Any]:
     """
