@@ -8,7 +8,20 @@ from assurance.assurance import AssuranceKernel
 from assurance.signing import Signer
 from assurance.validators import schema_validator
 from assurance.errors import ResourceRequired, RefusedNotGrounded, ValidationFailed
-from executor.sandbox import SandboxExecutor, Limits
+try:
+    from executor.sandbox import SandboxExecutor, Limits
+except ModuleNotFoundError:
+    # מסלול חדש
+    from adapters.fs_sandbox import FSSandbox as SandboxExecutor
+    try:
+        from adapters.fs_sandbox import Limits
+    except Exception:
+        from dataclasses import dataclass
+        @dataclass
+        class Limits:
+            cpu_ms: int = 2000
+            mem_kb: int = 128 * 1024
+            io_calls: int = 256
 from executor.policy import Policy
 from user_model.model import UserStore, UserModel
 
