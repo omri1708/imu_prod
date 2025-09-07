@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from server.dialog.intent import detect
 from server.dialog.state import SessionState
-from server.dialog.planner import normalize_build_request
+from server.dialog.planner import normalize_build_request, llm_build_spec
 
 from user_model.model import UserStore, UserModel
 from user_model.subject import SubjectEngine
@@ -63,18 +63,24 @@ async def send(payload: Dict[str,Any]):
             raise HTTPException(400, f"סירוב: {e}")
 
     # 3) בניית תוכנית — אתה מדבר, המערכת משלימה שאלות לבד
-    if intent=="build_app" or (st.stage=="build"):
-        st.stage="build"; st.slots.update(slots.get("spec") or {})
-        question, st.slots = normalize_build_request(slots.get("free_text",""), st.slots)
-        if "לאשר" in question or "confirm" in question.lower():
+    if intent=="build_app":
+        # ננסה לבנות Spec מלא בעזרת LLM לפי הפרופיל המצטבר; אם LLM כבוי – נשאר עם ההיוריסטיקה הקיימת
+        prof = subject.subject_profile(uid)
+        spec = llm_build_spec(msg, prof)
+        um=UserModel(store)
+        if not um.has_consent(uid,"adapters/run"):
             st.pending_q="confirm_build"
-            return _reply(question)
-        if "SDKs" in question or "נזדקק" in question:
-            st.pending_q=None
-            return _reply(question)  # בקשה אמיתית למשאבים חסרים — לא ממציאים
-        # חסר סוג/פרטים — נחזיר שאלה
-        st.pending_q="build_missing"
-        return _reply(question)
+            st.slots.update({"name": spec.get("name","app"),
+                             "stack": "python_web" if any(s.get("type")=="python_web" for s in spec.get("services",[])) else "python_app"})
+            return _reply("אני צריך אישור חד-פעמי להריץ בנייה. כתוב/כתבי: “אני מאשר”.")
+        try:
+            r=await orch.build(uid, spec)
+            st.stage="idle"; st.slots={}; st.pending_q=None
+            return _reply("בנוי ✔️", extra=r)
+        except ResourceRequired as e:
+            return {"ok":False,"text":"חסר משאב כדי להשלים בנייה.", "extra":{"resource_required":e.what,"obtain":e.how_to_get}}
+        except ValidationFailed as e:
+            raise HTTPException(400, f"שגיאת בדיקות: {e}")
 
     # אם המשתמש ענה "מאשר" אחרי השאלה
     if st.pending_q=="confirm_build":
