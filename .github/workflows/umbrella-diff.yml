@@ -30,3 +30,9 @@ jobs:
 
       - name: Diff staging vs prod
         run: python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml
+      
+      - name: Diff dev vs staging
+        run: python scripts/diff_umbrella.py rendered-dev.yaml rendered-staging.yaml scripts/allowed_diffs.yaml
+
+      - name: Diff staging vs prod
+        run: python scripts/diff_umbrella.py rendered-staging.yaml rendered-prod.yaml scripts/allowed_diffs.yaml

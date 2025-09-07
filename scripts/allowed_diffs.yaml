@@ -1,0 +1,32 @@
+# רשימת הבדלים מותרים בין סביבות (מעבר לנירמול שכבר מובנה בסקריפט)
+# חוקים כלליים לפי Kind ושמות שדות
+kinds:
+  Deployment:
+    # שדות נוספים שמותר להבדיל (JSON pointer יחסי מתחת ל .spec)
+    - /template/spec/nodeSelector
+    - /template/spec/tolerations
+    - /template/spec/affinity
+  Service:
+    - /spec/externalTrafficPolicy
+  Ingress:
+    - /metadata/annotations # מחוץ ל-imu/* כבר מסונן, זה לחיזוק
+  ServiceMonitor:
+    - /spec/selector/matchLabels
+
+# משאבים שלמים שמותר ש“ישתנו חופשי” (regex על kind/name/namespace)
+resources:
+  - kind: "ConfigMap"
+    name: ".*grafana-dashboards"
+    namespace: ".*"
+  - kind: "Ingress"
+    name: ".*"
+    namespace: ".*"
+
+# היתרים פרטניים לפי (kind,name,namespace) לשדה ספציפי (JSON pointer מ-root)
+fields:
+  - selector:
+      kind: "Deployment"
+      name: ".*external-dns.*"
+      namespace: ".*"
+    allow:
+      - /spec/template/spec/containers/0/args
