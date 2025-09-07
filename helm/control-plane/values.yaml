@@ -75,3 +75,14 @@ observability:
   pushgateway:
     enabled: false
     url: ""    # דוגמה: http://pushgateway.monitoring.svc:9091
+
+availability:
+  pdb:
+    enabled: true
+    api: { minAvailable: 1 }
+    ws:  { minAvailable: 1 }
+  spread:
+    enabled: true
+    topologyKey: "topology.kubernetes.io/zone"
+    maxSkew: 1
+    whenUnsatisfiable: "ScheduleAnyway"

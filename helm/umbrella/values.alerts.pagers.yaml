@@ -1,0 +1,49 @@
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 2m
+
+    route:
+      group_by: ['alertname','job','release']
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 2h
+      receiver: 'null'
+      routes:
+        - matchers: [ severity="critical" ]
+          receiver: 'pagerduty'
+        - matchers: [ severity="critical" ]
+          receiver: 'opsgenie'
+
+    receivers:
+      - name: 'null'
+      - name: 'pagerduty'
+        pagerduty_configs:
+          - routing_key: '{{ .Values.alerts.pagerduty.routingKey | default "" }}'
+            severity: '{{ (index .Alerts 0).Labels.severity | default "critical" }}'
+            send_resolved: true
+      - name: 'opsgenie'
+        opsgenie_configs:
+          - api_key: '{{ .Values.alerts.opsgenie.apiKey | default "" }}'
+            send_resolved: true
+            tags: [ 'imu', '{{ (index .Alerts 0).Labels.team | default "platform" }}' ]
+
+alerts:
+  pagerduty:
+    routingKey: ""     # ⚠️ חובה אם pagerduty בשימוש (gating)
+  opsgenie:
+    apiKey: ""         # ⚠️ חובה אם opsgenie בשימוש (gating)
+
+# Deep-link לדשבורדים — UID/URL
+dashboards:
+  grafanaUrl: "https://grafana.example.com"
+  sloUid: "imu_slo"
+  gateUid: "imu_gatekeeper"
+  diffsUid: "imu_allowed_diffs"
+  kindUid: "imu_kind_smoke_slo"
+
+gating:
+  alerts:
+    requirePagerDutyKey: true
+    requireOpsgenieKey: true

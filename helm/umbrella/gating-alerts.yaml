@@ -1,21 +1,36 @@
 {{- if and .Values.gating.enabled .Values.alertmanager.enabled }}
   {{- $receivers := (pluck "receivers" .Values.alertmanager.config | first) | default list }}
 
+  {{/* Slack */}}
   {{- if and .Values.gating.alerts.requireSlackWebhook (gt (len (where $receivers "name" "slack")) 0) }}
     {{- if or (not .Values.alerts.slack) (eq .Values.alerts.slack.webhook "") }}
-      {{- fail "Gating: Slack receiver requires alerts.slack.webhook" }}
+      {{- fail "Gating: Slack receiver requires alerts.slack.webhook (non-empty)" }}
     {{- end }}
   {{- end }}
 
+  {{/* Teams/Email (Pager composite) */}}
   {{- if and .Values.gating.alerts.requireTeamsWebhook (gt (len (where $receivers "name" "pager")) 0) }}
     {{- if or (not .Values.alerts.teams) (eq .Values.alerts.teams.webhook "") }}
-      {{- fail "Gating: Pager (Teams) requires alerts.teams.webhook" }}
+      {{- fail "Gating: Pager (Teams) requires alerts.teams.webhook (non-empty)" }}
+    {{- end }}
+  {{- end }}
+  {{- if and .Values.gating.alerts.requireEmailFields (gt (len (where $receivers "name" "pager")) 0) }}
+    {{- if or (not .Values.alerts.email) (eq .Values.alerts.email.to "") (eq .Values.alerts.email.from "") (eq .Values.alerts.email.smarthost "") }}
+      {{- fail "Gating: Pager (Email) requires alerts.email.{to,from,smarthost}" }}
     {{- end }}
   {{- end }}
 
-  {{- if and .Values.gating.alerts.requireEmailFields (gt (len (where $receivers "name" "pager")) 0) }}
-    {{- if or (not .Values.alerts.email) (eq .Values.alerts.email.to "") (eq .Values.alerts.email.from "") (eq .Values.alerts.email.smarthost "") }}
-      {{- fail "Gating: Pager (Email) requires non-empty alerts.email.{to,from,smarthost}" }}
+  {{/* PagerDuty */}}
+  {{- if and .Values.gating.alerts.requirePagerDutyKey (gt (len (where $receivers "name" "pagerduty")) 0) }}
+    {{- if or (not .Values.alerts.pagerduty) (eq .Values.alerts.pagerduty.routingKey "") }}
+      {{- fail "Gating: PagerDuty receiver requires alerts.pagerduty.routingKey" }}
+    {{- end }}
+  {{- end }}
+
+  {{/* Opsgenie */}}
+  {{- if and .Values.gating.alerts.requireOpsgenieKey (gt (len (where $receivers "name" "opsgenie")) 0) }}
+    {{- if or (not .Values.alerts.opsgenie) (eq .Values.alerts.opsgenie.apiKey "") }}
+      {{- fail "Gating: Opsgenie receiver requires alerts.opsgenie.apiKey" }}
     {{- end }}
   {{- end }}
 {{- end }}

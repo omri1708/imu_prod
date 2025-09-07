@@ -12,6 +12,14 @@ spec:
     metadata:
       labels: { app: {{ include "cp.fullname" . }}, tier: api }
     spec:
+      {{- if .Values.availability.spread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.availability.spread.maxSkew }}
+          topologyKey: {{ .Values.availability.spread.topologyKey | quote }}
+          whenUnsatisfiable: {{ .Values.availability.spread.whenUnsatisfiable | quote }}
+          labelSelector:
+            matchLabels: { app: {{ include "cp.fullname" . }}, tier: api }
+      {{- end }}    
       replicas: {{ .Values.replicas.api }}
       selector: { matchLabels: { app: {{ include "cp.fullname" . }}, tier: api } }
       template:
