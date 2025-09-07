@@ -52,6 +52,7 @@ from server.k8s_template_synth_api import router as k8s_synth_router
 from server.helm_template_synth_api import router as helm_synth_router
 from server.controlplane_deploy_api import router as cp_deploy_router
 from server.emergency_api import router as emergency_router
+from server.routers.adapters_secure import router as adapters_secure_router
 
 _synth_reload()
 
@@ -60,6 +61,7 @@ APP.include_router(scheduler_router)
 scheduler_boot()
 start_policy_router()
 
+APP.include_router(adapters_secure_router)
 APP.include_router(emergency_router)
 APP.include_router(cp_deploy_router)
 APP.include_router(helm_synth_router)
