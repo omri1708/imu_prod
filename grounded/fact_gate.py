@@ -4,12 +4,12 @@ import time
 from typing import List, Dict, Any, Tuple, Optional
 from grounded.provenance_store import EvidenceStore
 from grounded.validators import Rule, TrustRule, ApiRule, ConsistencyRule, ValidatorRegistry, default_registry, ValidationError
+from assurance.errors import ValidationFailed
 
-
-from grounded.source_policy import policy_singleton as SourcePolicy
+from grounded.source_policy import policy_singleton as SP
 from grounded.provenance import ProvenanceStore
 
-
+class RefusedNotGrounded(Exception): ...
 class GroundingError(Exception): ...
 
 
@@ -18,7 +18,7 @@ def require_claims(evidence_reqs: List[str], evidence_records: List[Dict[str,Any
     Enforce: each required claim has at least one evidence record with trust >= threshold and not expired by source TTL.
     """
     now = time.time() if now is None else now
-    thr = SourcePolicy.trust_threshold if trust_threshold is None else float(trust_threshold)
+    thr = SP.trust_threshold if trust_threshold is None else float(trust_threshold)
 
     # לקבץ לפי claim
     by_claim={}
@@ -32,11 +32,12 @@ def require_claims(evidence_reqs: List[str], evidence_records: List[Dict[str,Any
         for r in by_claim.get(need, []):
             trust = float(r.get("trust", 0.0))
             url   = r.get("source_url") or "internal.test://evidence"
-            ttl   = SourcePolicy.ttl_for(url)
+            ttl   = SP.ttl_for(url)
             ts    = float(r.get("ts", 0))
             fresh = (ttl==0) or ((now - ts) <= ttl)
-            if trust >= thr and fresh and (SourcePolicy.domain_allowed(url) or url.startswith("internal.test")):
-                ok=True; break
+            if trust >= thr and fresh and (SP.domain_allowed(url) or url.startswith("internal.test")):
+                ok=True
+                break
         if not ok:
             missing.append(need)
     if missing:
@@ -63,6 +64,7 @@ class FactGate:
         self.store = store or EvidenceStore()
         self.registry = registry or default_registry()
 
+
     def check_claims(self, claims:List[Dict[str,Any]], strict:bool=True) -> Tuple[bool,List[Dict[str,Any]]]:
         diagnostics=[]
         all_ok=True
@@ -74,11 +76,23 @@ class FactGate:
                 diagnostics.append(diag)
                 if not ok:
                     claim_ok=False
-                    if strict: all_ok=False
+                    if strict:
+                        all_ok=False
             if claim_ok and evid:
                 diagnostics.append({"rule":"attach_prov","prov_id":evid.get("prov_id"),"ok":True})
         return all_ok, diagnostics
-
+    
+    def require_sources(self, sources: List[str]) -> List[Dict[str,Any]]:
+        if not sources:
+            raise RefusedNotGrounded("grounding_required:no_sources")
+        evid = []
+        for s in sources:
+            rec = self.store.register(s)
+            if not self.store.verify(rec["hash"]):
+                raise ValidationFailed(f"bad_evidence:{s}")
+            evid.append(rec)
+        return evid
+    
     def check_claim(self, claim: str, now: float, pol: FactGatePolicy) -> List[str]:
         errors: List[str] = []
         evs = self.store.claim_evidences(claim)
@@ -88,15 +102,18 @@ class FactGate:
         ok_count = 0
         for ev in evs:
             if not self.store.verify_evidence(ev):
-                errors.append("bad_signature_or_missing_content"); continue
+                errors.append("bad_signature_or_missing_content")
+                continue
             meta = ev.get("meta", {})
             trust = float(meta.get("trust", 0.0))
             if trust < pol.min_trust:
-                errors.append(f"low_trust:{trust}"); continue
+                errors.append(f"low_trust:{trust}")
+                continue
             fetched = float(ev.get("fetched_at", 0.0))
             max_age = float(meta.get("max_age_sec", pol.max_age_sec))
             if fetched and max_age>0 and now - fetched > max_age:
-                errors.append("stale_evidence"); continue
+                errors.append("stale_evidence")
+                continue
             ok_count += 1
         if ok_count < pol.min_sources:
             errors.append(f"not_enough_valid_evidence:{ok_count}/{pol.min_sources}")
@@ -168,11 +185,11 @@ class FreshnessRule(Rule):
     def __init__(self,max_age_seconds:int=86400): self.max_age=max_age_seconds
     
     def check(self, claim:Dict[str,Any], evid:Optional[Dict[str,Any]]):
-        if not evid: return False, {"rule":"freshness","ok":False,"reason":"no_evidence"}
+        if not evid:
+            return False, {"rule":"freshness","ok":False,"reason":"no_evidence"}
         age=time.time()-evid.get("ts",0)
         ok= age <= self.max_age
         return ok, {"rule":"freshness","ok":ok,"age":age,"max":self.max_age}
-
 
 class EvidenceIndex:
     """Index claims to evidence stored in provenance store."""

@@ -9,7 +9,7 @@ from engine.adapter_registry import get_adapter
 from synth.specs_adapter import parse_adapter_jobs
 from engine.contracts_gate import enforce_respond_contract
 import time, random
-from broker.stream import broker
+
 
 
 AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")

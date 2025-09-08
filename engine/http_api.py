@@ -1,7 +1,7 @@
 # engine/http_api.py (חיבור /run_adapter + SSE ל-UI)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import json, time, threading
+import json, time, threading, queue, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from typing import Callable, Dict, Any
@@ -9,13 +9,11 @@ from broker.bus import EventBus
 from adapters.adapter_runner import run_adapter
 from policy.user_policy import DEFAULT_POLICY
 from provenance.store import ProvenanceStore, ResourceRequired
-import json, time, threading, queue, os
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Dict, Any, Callable
-from adapters.registry import ADAPTERS, ResourceRequired
-from broker.prio_broker import GLOBAL_BROKER
-from policy.user_policies import must_be_grounded, per_topic_limits
-from grounded.http_verifier import verify_claim, VerificationError
+
+from adapters.registry import ADAPTERS
+from broker.prior_broker import GLOBAL_BROKER
+from policy.user_policy import must_be_grounded, per_topic_limits
+from grounded.http_verifier import HttpVerifier, ExternalVerifyError
 
 BUS = EventBus()
 PROV = ProvenanceStore()
@@ -58,6 +56,9 @@ class APIServer(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length","0"))
             raw = self.rfile.read(length)
             req = json.loads(raw or b"{}")
+            if not isinstance(req, dict):
+                raise TypeError("expected top-level JSON object")
+            user_id = req.get("user_id", "anon")
             user_id = req.get("user_id","anon")
             adapter = req["adapter"]
             run_id = req.get("run_id") or f"run_{int(time.time()*1000)}"
@@ -70,9 +71,9 @@ class APIServer(BaseHTTPRequestHandler):
                 ok_digests = []
                 for claim in claims:
                     try:
-                        res = verify_claim(user_id, claim)
+                        res = HttpVerifier.verify_claim(user_id, claim)
                         ok_digests.append(res["digest"])
-                    except VerificationError as e:
+                    except ExternalVerifyError as e:
                         return self._json(400, {"error":"claim_verification_failed", "detail": str(e)})
                 args["_evidence_digests"] = ok_digests
 

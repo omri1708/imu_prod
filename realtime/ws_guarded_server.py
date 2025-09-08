@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio, json
 from typing import Any, Callable, Awaitable, Optional
-from realtime.ws_server import WSServer
+from realtime.ws_minimal import WSServer
 from engine.evidence_middleware import guarded_handler
 from grounded.claims import current
 from security.response_signer import sign_payload

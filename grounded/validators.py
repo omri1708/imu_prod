@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Dict, Any, Tuple, Optional, List
 import json, time
-from grounded.provenance_store import ProvenanceStore
+from grounded.provenance_store import CAS
 from adapters.http_fetch import http_fetch
 
 

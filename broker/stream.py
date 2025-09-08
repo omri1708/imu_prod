@@ -4,8 +4,7 @@ import time, threading, queue, json
 from dataclasses import dataclass
 from typing import Dict, Optional, Iterator, Tuple, Any, List, Deque
 import collections, os, math
-import time, threading, collections, json, os, math, random
-from typing import Deque, Dict, Any, Optional, Tuple, List
+import time, threading, json, random
 from .policy import DropPolicy, load_hint, WFQ
 
 PRIORITY = {"logic": 3, "telemetry": 2, "logs": 1}
@@ -23,10 +22,13 @@ class TokenBucket:
 
     def allow(self, cost: float = 1.0) -> bool:
         with self._lock:
-            t = _now(); dt = max(0.0, t - self.t_last); self.t_last = t
+            t = _now()
+            dt = max(0.0, t - self.t_last)
+            self.t_last = t
             self.tokens = min(self.burst, self.tokens + dt * self.rps)
             if self.tokens >= cost:
-                self.tokens -= cost; return True
+                self.tokens -= cost
+                return True
             return False
 
 class _Sub:
@@ -43,52 +45,75 @@ class _Sub:
     def _drop(self, reason: str):
         self.dropped_total += 1
         if self._drop_notify:
-            try: self._drop_notify(self.topic, reason)
-            except Exception: pass
+            try:
+                self._drop_notify(self.topic, reason)
+            except Exception:
+                pass
 
     def push(self, prio: int, ev: dict) -> bool:
         with self._lock:
             if len(self.q) < self.max_queue:
-                self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+                self.q.append((prio, ev))
+                self._pop_cv.notify_all()
+                return True
 
             pol = self.policy
             if pol == DropPolicy.TAIL_DROP:
-                self._drop("queue_full_tail_drop"); return False
+                self._drop("queue_full_tail_drop")
+                return False
             if pol == DropPolicy.HEAD_DROP:
                 if self.q:
-                    self.q.popleft(); self._drop("queue_full_head_drop")
-                    self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
-                self._drop("queue_full_head_drop_empty"); return False
+                    self.q.popleft()
+                    self._drop("queue_full_head_drop")
+                    self.q.append((prio, ev))
+                    self._pop_cv.notify_all()
+                    return True
+                self._drop("queue_full_head_drop_empty")
+                return False
             if pol == DropPolicy.LOWEST_PRIORITY_REPLACE:
                 lowest_i, lowest_p = None, 10**9
                 for i, (p, _) in enumerate(self.q):
-                    if p < lowest_p: lowest_p, lowest_i = p, i
+                    if p < lowest_p:
+                        lowest_p, lowest_i = p, i
                 if lowest_i is not None and prio > lowest_p:
                     self._drop("queue_full_replace_lowest")
-                    self.q.rotate(-lowest_i); self.q.popleft(); self.q.rotate(lowest_i)
-                    self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
-                self._drop("queue_full_keep"); return False
+                    self.q.rotate(-lowest_i)
+                    self.q.popleft()
+                    self.q.rotate(lowest_i)
+                    self.q.append((prio, ev))
+                    self._pop_cv.notify_all()
+                    return True
+                self._drop("queue_full_keep")
+                return False
             if pol == DropPolicy.RANDOM_EARLY_DROP:
                 # הסתברות לזריקה עולה עם עומס
                 prob = min(0.9, len(self.q)/float(self.max_queue))
                 if random.random() < prob:
-                    self._drop("queue_red_drop"); return False
-                self.q.append((prio, ev)); self._pop_cv.notify_all(); return True
+                    self._drop("queue_red_drop")
+                    return False
+                self.q.append((prio, ev))
+                self._pop_cv.notify_all()
+                return True
 
             # ברירת מחדל שמרנית
-            self._drop("queue_full_default_drop"); return False
+            self._drop("queue_full_default_drop")
+            return False
 
     def pop(self, timeout: float = 15.0) -> Optional[dict]:
         deadline = _now() + timeout
         with self._lock:
             while not self.q:
                 left = deadline - _now()
-                if left <= 0: return None
+                if left <= 0:
+                    return None
                 self._pop_cv.wait(left)
             best_i, best_p = 0, -1
             for i, (p, _) in enumerate(self.q):
-                if p > best_p: best_p, best_i = p, i
-            self.q.rotate(-best_i); _, ev = self.q.popleft(); self.q.rotate(best_i)
+                if p > best_p:
+                    best_p, best_i = p, i
+            self.q.rotate(-best_i)
+            _, ev = self.q.popleft()
+            self.q.rotate(best_i)
             return ev
 
 class Broker:
@@ -135,16 +160,19 @@ class Broker:
 
         # שסתום גלובלי + N*burst guard
         if not self.global_bucket.allow():
-            with self._lock: self._metrics["rejected_global"] += 1
+            with self._lock:
+                self._metrics["rejected_global"] += 1
             return False
         backlog = self._backlog_size()
         hint = load_hint(backlog, self.global_backlog_soft, self.global_backlog_hard)
         if hint == "critical":
-            with self._lock: self._metrics["rejected_global"] += 1
+            with self._lock:
+                self._metrics["rejected_global"] += 1
             return False
 
         with self._lock:
-            if topic not in self._topics: self.configure_topic(topic)
+            if topic not in self._topics:
+                self.configure_topic(topic)
             tcfg = self._topics[topic]
             # WFQ vstart (לפי משקל)
             active_sum = sum(t["weight"] for t in self._topics.values())
@@ -178,7 +206,8 @@ class Broker:
         total = 0
         with self._lock:
             for subs in self._subs.values():
-                for s in subs: total += len(s.q)
+                for s in subs:
+                    total += len(s.q)
         return total
 
     def _on_sub_drop(self, topic: str, reason: str):

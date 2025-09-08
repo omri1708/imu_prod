@@ -7,7 +7,7 @@ ENTRY = """\
 # __main__.py – אריזת ריצה ל-IMU
 from __future__ import annotations
 import argparse, json, asyncio
-from realtime.ws_server import WSServer
+from streaming.ws_server import WSServer
 from ui.toolkits_bridge import serve_static_ui, console_render
 
 async def main():

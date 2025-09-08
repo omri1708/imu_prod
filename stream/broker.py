@@ -1,11 +1,11 @@
 # stream/broker.py
 # -*- coding: utf-8 -*-
-import time, threading, heapq
+import time, threading, heapq, os
 from typing import Dict, List, Tuple, Optional, Iterable, Any, Deque
 from policy.user_policy import POLICIES
 import asyncio, time, heapq
 from collections import deque, defaultdict
-
+from contextvars import ContextVar
 
 class _Event:
     __slots__ = ("ts","prio","topic","data")
@@ -55,9 +55,13 @@ class Topic:
                     self._last_emit = time.time()
                     return ev
                 left = end - time.time()
-                if left <= 0: return None
+                if left <= 0:
+                    return None
                 self._cv.wait(min(0.25, left))
 
+_current_user: ContextVar[str] = ContextVar("imu_user_id", default=os.getenv("IMU_TEST_USER", "test"))
+
+_brokers: Dict[str, "Broker"] = {}
 class Broker:
     """
     תור עדיפויות פר-משתמש+נושא, עם מגבלות קצבים, תקרת burst גלובלית,
@@ -123,9 +127,21 @@ class Broker:
         q = asyncio.Queue(maxsize=max_queue)
         self._subs[topic] = q
         return q
+    
+def get_broker(user_id: Optional[str] = None) -> Broker:
+    """החזר ברוקר עבור user_id; צור אם חסר (Lazy)."""
+    uid = user_id or _current_user.get()
+    b = _brokers.get(uid)
+    if b is None:
+        b = Broker(uid)
+        _brokers[uid] = b
+    return b
 
+BROKER = get_broker()
 
-BROKER = Broker()
+def set_current_user(user_id: str) -> None:
+    _current_user.set(user_id)
+
 
 #------
 class StreamBroker:

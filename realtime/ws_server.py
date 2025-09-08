@@ -2,10 +2,25 @@ import asyncio, base64, hashlib, struct, zlib
 from typing import Dict, Any
 from .priority_bus import AsyncPriorityTopicBus
 from .backpressure import GlobalTokenBucket
+try:
+    # נסה את השרת ה’גולמי’ עם thread
+    from streaming.ws_server import WSServer as _RawWSServer
+    class WSServer(_RawWSServer):
+        async def start(self):
+            import threading
+            t = threading.Thread(target=self.run, daemon=True)
+            t.start()
+            self._thread = t
+            return {"host": self.host, "port": self.port}
+except Exception:
+    # נפילה לשרת הא-סינכרוני המינימלי
+    from realtime.ws_minimal import WSServer 
+
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-class WSProtocolError(Exception): pass
+class WSProtocolError(Exception):
+    pass
 
 class WebSocketConnection:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, bus: AsyncPriorityTopicBus):

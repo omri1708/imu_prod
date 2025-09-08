@@ -1,18 +1,53 @@
 # imu_repo/grounded/provenance_store.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, threading
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Callable
 from user.crypto_store import CryptoStore
 from grounded.source_policy import policy_singleton as SourcePolicy
 from urllib.parse import urlparse
 
+def _pick_root() -> Path:
+    candidates = []
+    env = os.environ.get("IMU_PROV_ROOT")
+    if env:
+        candidates.append(Path(env).resolve())
+    candidates.append(Path("./assurance_store_text").resolve())
+    candidates.append(Path("./assurance_store").resolve())
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            return c
+        except Exception:
+            continue
+    return Path.cwd()
 
-ROOT = "/mnt/data/imu_repo/evidence"
-OBJ = os.path.join(ROOT, "objects")
-META = os.path.join(ROOT, "meta")
-KEYF = os.path.join(ROOT, "secret.key")
-os.makedirs(OBJ, exist_ok=True); os.makedirs(META, exist_ok=True)
+ROOTP = _pick_root()
+OBJ   = os.path.join(ROOTP, "objects")
+META  = os.path.join(ROOTP, "meta")
+KEYF  = os.path.join(ROOTP, "secret.key")
+IDX  = os.path.join(ROOTP, "index.jsonl")
+KEY  = os.path.join(ROOTP, "hmac.key")
+os.makedirs(OBJ, exist_ok=True)
+os.makedirs(ROOTP, exist_ok=True)
+if not os.path.exists(KEY):
+    open(KEY,"wb").write(os.urandom(32))
 _lock = threading.RLock()
+
+def _ensure_dirs():
+    global OBJ, META, KEYF, ROOTP
+    try:
+        os.makedirs(OBJ, exist_ok=True)
+        os.makedirs(META, exist_ok=True)
+    except Exception as e:
+        # נסיון fallback לספרייה בתוך הפרויקט
+        fallback = Path("./assurance_store_text").resolve()
+        os.makedirs(fallback / "objects", exist_ok=True)
+        os.makedirs(fallback / "meta", exist_ok=True)
+        ROOTP = fallback
+        OBJ   = os.path.join(ROOTP, "objects")
+        META  = os.path.join(ROOTP, "meta")
+        KEYF  = os.path.join(ROOTP, "secret.key")
 
 
 def _sha256(b: bytes) -> str:
@@ -26,7 +61,8 @@ def _hmac(digest_hex: str, key: bytes) -> str:
 def _key() -> bytes:
     if not os.path.exists(KEYF):
         k = os.urandom(32)
-        with open(KEYF, "wb") as f: f.write(k)
+        with open(KEYF, "wb") as f:
+            f.write(k)
         return k
     return open(KEYF, "rb").read()
 
@@ -39,6 +75,8 @@ def _meta_path(digest_hex: str) -> str:
     return os.path.join(META, f"{digest_hex}.json")
 
 def add_evidence(content: bytes, meta: Dict[str, Any] | None=None, *, sign: bool=True) -> str:
+    _ensure_dirs()
+    ...
     """
     מכניס ראיה למחסן (content-addressable) ושומר מטה־דאטה:
       meta: {source_url?, fetched_at?, ttl_s?, trust? in [0..1]}
@@ -51,7 +89,8 @@ def add_evidence(content: bytes, meta: Dict[str, Any] | None=None, *, sign: bool
         os.makedirs(ddir, exist_ok=True)
         op = _obj_path(dg)
         if not os.path.exists(op):
-            with open(op, "wb") as f: f.write(content)
+            with open(op, "wb") as f:
+                f.write(content)
         m = dict(meta or {})
         m.setdefault("fetched_at", int(time.time()))
         m.setdefault("ttl_s", 0)
@@ -91,38 +130,44 @@ def verify(digest_hex: str, *, require_hmac: bool=True, min_trust: float=0.0) ->
     op = _obj_path(digest_hex)
     mp = _meta_path(digest_hex)
     if not os.path.exists(op):
-        out["reasons"].append("missing_object"); return out
+        out["reasons"].append("missing_object")
+        return out
     if not os.path.exists(mp):
-        out["reasons"].append("missing_meta"); return out
+        out["reasons"].append("missing_meta")
+        return out
 
     content = open(op, "rb").read()
     dg2 = hashlib.sha256(content).hexdigest()
     if dg2 != digest_hex:
-        out["reasons"].append("digest_mismatch"); return out
+        out["reasons"].append("digest_mismatch")
+        return out
 
     m = json.load(open(mp, "r", encoding="utf-8"))
     if require_hmac:
         h = m.get("hmac")
         if not h:
-            out["reasons"].append("missing_hmac"); return out
+            out["reasons"].append("missing_hmac")
+            return out
         if not hmac.compare_digest(h, _hmac(digest_hex, _key())):
-            out["reasons"].append("hmac_invalid"); return out
+            out["reasons"].append("hmac_invalid")
+            return out
 
     ttl = int(m.get("ttl_s", 0))
     if ttl > 0:
         if int(time.time()) > int(m.get("fetched_at", 0)) + ttl:
-            out["reasons"].append("expired"); return out
+            out["reasons"].append("expired")
+            return out
 
     trust = float(m.get("trust", 0.0))
     if trust < float(min_trust):
-        out["reasons"].append("trust_below_threshold"); return out
+        out["reasons"].append("trust_below_threshold")
+        return out
 
     out["ok"] = True
     out["meta"] = m
     return out
 
 class ProvenanceError(Exception): ...
-
 
 class CAS:
     def __init__(self, root: str = ".imu_state/prov"):
@@ -132,13 +177,15 @@ class CAS:
         os.makedirs(self.obj, exist_ok=True)
         os.makedirs(root, exist_ok=True)
         if not os.path.exists(self.idx):
-            with open(self.idx,"w",encoding="utf-8"): pass
+            with open(self.idx,"w",encoding="utf-8"):
+                pass
 
     def put(self, content: bytes, meta: Dict[str,Any]) -> str:
         h = _sha256(content)
         path = os.path.join(self.obj, h)
         if not os.path.exists(path):
-            with open(path, "wb") as f: f.write(content)
+            with open(path, "wb") as f:
+                f.write(content)
         rec = {"hash":h, "meta":meta, "ts":time.time()}
         with open(self.idx,"a",encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False)+"\n")
@@ -146,8 +193,10 @@ class CAS:
 
     def get(self, h: str) -> Optional[bytes]:
         path = os.path.join(self.obj, h)
-        if not os.path.exists(path): return None
-        with open(path,"rb") as f: return f.read()
+        if not os.path.exists(path):
+            return None
+        with open(path,"rb") as f:
+            return f.read()
 
 
 class EvidenceStore:
@@ -195,7 +244,8 @@ class EvidenceStore:
         path = path.strip()
         if not os.path.exists(path):
             raise ProvenanceError(f"file_not_found:{path}")
-        with open(path,"rb") as f: b=f.read()
+        with open(path,"rb") as f:
+            b=f.read()
         meta = {"source": f"file:{path}", "kind":"file", "trust": 0.8, "fetched_at": time.time()}
         return b, meta
 
@@ -207,8 +257,10 @@ class EvidenceStore:
         u = urlparse("httpcache://"+spec if not spec.startswith("//") else "httpcache:"+spec)
         root = ".imu_state/httpcache"
         p = os.path.join(root, u.hostname or "host", *(u.path.strip("/").split("/") if u.path else []))
-        if not os.path.exists(p): raise ProvenanceError(f"httpcache_not_found:{p}")
-        with open(p,"rb") as f: b=f.read()
+        if not os.path.exists(p):
+            raise ProvenanceError(f"httpcache_not_found:{p}")
+        with open(p,"rb") as f:
+            b=f.read()
         meta = {
             "source": f"httpcache://{u.hostname}{u.path}",
             "kind": "httpcache",
@@ -232,7 +284,8 @@ class EvidenceStore:
         if scheme not in self.resolvers:
             raise ProvenanceError(f"no_resolver_for:{scheme}")
         content, meta = self.resolvers[scheme](rest)
-        if extra_meta: meta.update(extra_meta)
+        if extra_meta:
+            meta.update(extra_meta)
         # תוספת trust/max_age לפי דומיין/מדיניות
         trust, max_age = self.policy.trust_for(source_uri)
         meta.setdefault("trust", trust)
@@ -242,21 +295,27 @@ class EvidenceStore:
         return {"hash": h, "sig": sig, "meta": meta, "fetched_at": meta.get("fetched_at", time.time())}
 
     def link_claim(self, claim: str, evidences: List[Dict[str,Any]]):
-        with open(self.claims_map,"r",encoding="utf-8") as f: m = json.load(f)
+        with open(self.claims_map,"r",encoding="utf-8") as f:
+            m = json.load(f)
         arr = m.get(claim, [])
         arr.extend(evidences)
         m[claim] = arr
-        with open(self.claims_map,"w",encoding="utf-8") as f: json.dump(m, f, ensure_ascii=False, indent=2)
+        with open(self.claims_map,"w",encoding="utf-8") as f:
+            json.dump(m, f, ensure_ascii=False, indent=2)
 
     def claim_evidences(self, claim: str) -> List[Dict[str,Any]]:
-        with open(self.claims_map,"r",encoding="utf-8") as f: m = json.load(f)
+        with open(self.claims_map,"r",encoding="utf-8") as f:
+            m = json.load(f)
         return m.get(claim, [])
 
     def verify_evidence(self, ev: Dict[str,Any]) -> bool:
-        h=ev.get("hash"); sig=ev.get("sig")
+        h=ev.get("hash")
+        sig=ev.get("sig")
         content=self.cas.get(h) if h else None
-        if not content or not sig: return False
-        if not CryptoStore(os.path.join(self.cas.root, "..", "crypto.key")).verify(content, sig): return False
+        if not content or not sig:
+            return False
+        if not CryptoStore(os.path.join(self.cas.root, "..", "crypto.key")).verify(content, sig):
+            return False
         return True
 
 

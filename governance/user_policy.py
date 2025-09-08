@@ -1,6 +1,6 @@
-from typing import Dict, Tuple, Any
-import time
-from governance.policy import RespondPolicy, EvidenceRule, Subspace
+from typing import Dict, Tuple
+from governance.policy import RespondPolicy, EvidenceRule
+from provenance.policy import Subspace
 from grounded.evidence_contracts import EvidenceIndex
 
 

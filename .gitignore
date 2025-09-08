@@ -7,6 +7,9 @@ __pycache__/
 runs/
 dist/
 build/
-שיחה.md
-שיחה 2.md
-שיחה 3.md
+.imu_state/
+runs/
+logs/
+assurance_store_text/
+.hmac_key
+assurance_store_text/*.key

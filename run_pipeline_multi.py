@@ -2,7 +2,7 @@
 from __future__ import annotations
 import sys, json
 from synth.specs import BuildSpec, Contract
-from engine.pipeline_multi import run_pipeline_multi
+from engine.pipelines.compat import run_pipeline_compat
 
 def _schema():
     return {
@@ -25,7 +25,7 @@ def main():
         contracts=[Contract(name="svc", schema=_schema())],
         evidence_requirements=["service_tests","perf_summary","ui_accessibility"]
     )
-    out = run_pipeline_multi(spec, user_id="multi_user")
+    out = run_pipeline_compat(spec, user_id = "user")
     print(json.dumps(out["aggregate"], ensure_ascii=False, indent=2))
 
 if __name__=="__main__":

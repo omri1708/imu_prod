@@ -30,8 +30,13 @@ def _weighted_consistency_if_requested(claims: List[Dict[str,Any]], policy: Dict
         w = float(wmap.get(cid, 1.0))
         G.add_claim(cid, c, weight=w)
     for r in rels:
-        a = r.get("a"); b = r.get("b"); rel = r.get("rel")
-        meta = dict(r); meta.pop("a",None); meta.pop("b",None); meta.pop("rel",None)
+        a = r.get("a")
+        b = r.get("b")
+        rel = r.get("rel")
+        meta = dict(r)
+        meta.pop("a",None)
+        meta.pop("b",None)
+        meta.pop("rel",None)
         if isinstance(a,str) and isinstance(b,str) and isinstance(rel,str):
             G.relate(a,b,rel, **meta)
     G.check()

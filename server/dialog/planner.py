@@ -1,62 +1,59 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from typing import Tuple, Dict, Any, List
-import json, os
-LLM_ENABLED = os.getenv("LLM_ENABLED","0")=="1"
+from typing import Tuple, Dict, Any
+import os, json
+
+LLM_ENABLED = os.getenv("LLM_ENABLED","0") == "1"
+_llm = None
 if LLM_ENABLED:
-    from integration.llm_client import LLMClient
-    _llm = LLMClient()
-
-def normalize_build_request(free_text:str, slots:Dict[str,Any]) -> Tuple[str,Dict[str,Any]]:
-    """
-    מחלץ כוונה לבנות: סוג (web/cli/mobile/desktop), שם, פלטפורמה. אם חסר — נחזיר שאלה ידידותית.
-    """
-    s=slots.copy()
-    # סוג ברירת מחדל לפי טקסט – מפשט: "אתר"→web, "אפליקציה"→web, "כלי"→cli
-    low=free_text.lower()
-    if "אתר" in free_text or "site" in low or "web" in low: s.setdefault("type","web")
-    if "כלי" in free_text or "cli" in low: s.setdefault("type","cli")
-    if "mobile" in low or "android" in low or "ios" in low: s.setdefault("type","mobile")
-    if "desktop" in low or "unity" in low: s.setdefault("type","desktop")
-
-    s.setdefault("name","myapp")
-
-    # החזר שאלה אם חסר
-    if "type" not in s:
-        return ("איזה סוג תרצה? (אתר / כלי שורת־פקודה / מובייל / דסקטופ)", s)
-    t=s["type"]
-    if t=="web":
-        s.setdefault("stack","python_web")  # Flask מינימלי; אפשר להחליף ל-node/go בהמשך
-    elif t=="cli":
-        s.setdefault("stack","python_app")
-    elif t in ("mobile","desktop"):
-        # נבקש הרכבות עתידיות; כרגע נחזיר בקשת משאבים אמיתית
-        return ("מוכן. לפיתוח {} נזדקק ל-SDKs (Android/iOS/Unity). תרצה שאתן הוראות התקנה או שנתחיל מגרסה Web/CLI זמינה?".format("מובייל" if t=="mobile" else "דסקטופ"), s)
-    return ("מצוין. אבנה '{}' מסוג {} (stack: {}). לאשר?".format(s["name"], s["type"], s["stack"]), s)
-
-def llm_build_spec(user_text: str, subject_profile: Dict[str,Any] | None = None) -> Dict[str,Any]:
-    """
-    מפיק BuildSpec ישיר (שם/שירותים/אילוצים) ל-orchestrator.build.
-    שומר על אפס הלוצינציות: המודל מייצר *תכנית*, הביצוע בפועל נשאר דרך המנועים הדטרמיניסטיים.
-    """
-    if not LLM_ENABLED:
-        # fallback: כמו היום – שירות יחיד בהתאם להיוריסטיקה
-        _, s = normalize_build_request(user_text, {})
-        return {"name": s.get("name","app"),
-                "services":[{"type":"python_web" if s.get("stack")=="python_web" else "python_app",
-                             "name": s.get("name","app")}]}
-    prof = subject_profile or {}
-    sys = ("את/ה מתכננ/ת תוכנה זהיר/ה. הפק JSON *תקין בלבד* לשדות:"
-           " name, services[{type in [python_app,python_web], name}], constraints{...}."
-           " אל תבטיח פעולה שלא ניתן לבצע. אין טקסט חופשי, JSON בלבד.")
-    user = f"פרופיל:\n{json.dumps(prof,ensure_ascii=False)}\n\nבקשה:\n{user_text}\n"
-    draft = _llm.chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.2, max_tokens=700)
     try:
-        spec = json.loads(draft)
-        # קשיחה: ודא פורמט מינימלי
-        if not isinstance(spec.get('services'), list) or not spec.get('services'):
-            spec['services'] = [{"type":"python_web","name": spec.get("name","app")}]
-        return spec
+        from integration.llm_client import LLMClient
+        _llm = LLMClient()
     except Exception:
-        # fallback בטוח
-        return {"name":"app","services":[{"type":"python_web","name":"app"}]}
+        LLM_ENABLED = False
+
+def normalize_build_request(free_text: str, slots: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """
+    מחלץ בקשה לבנייה: type (web/cli/mobile/desktop), name, stack (python_web/python_app).
+    אם חסר מידע – מחזיר שאלה. אם LLM פעיל, ממלא מראש JSON לפי subject_profile.
+    """
+    s = dict(slots or {})
+
+    # 1) LLM (אם פעיל) – JSON קשיח בלבד
+    if LLM_ENABLED and _llm:
+        prof = s.get("subject_profile") or {}
+        sys = ("החזר JSON תקין בלבד: {name, type in [web,cli,mobile,desktop], stack in [python_web,python_app]}. "
+               "התאם לבקשת המשתמש ולהעדפות בפרופיל. אין טקסט חופשי.")
+        try:
+            draft = _llm.chat(
+                [{"role":"system","content":sys},
+                 {"role":"user","content":"פרופיל:\n"+json.dumps(prof,ensure_ascii=False)+"\n\nבקשה:\n"+(free_text or "")}],
+                temperature=0.2, max_tokens=200)
+            data = json.loads(draft)
+            if isinstance(data, dict):
+                if data.get("name"):  s["name"]=data["name"]
+                if data.get("type") in ("web","cli","mobile","desktop"): s["type"]=data["type"]
+                if data.get("stack") in ("python_web","python_app"):     s["stack"]=data["stack"]
+        except Exception:
+            pass
+
+    # 2) היוריסטיקה משלימה
+    low = (free_text or "").lower()
+    if "אתר" in (free_text or "") or "web" in low or "site" in low: s.setdefault("type","web")
+    if "cli" in low or "כלי" in (free_text or ""): s.setdefault("type","cli")
+    if any(k in low for k in ("mobile","android","ios")): s.setdefault("type","mobile")
+    if any(k in low for k in ("desktop","unity")): s.setdefault("type","desktop")
+    s.setdefault("name","app")
+
+    # 3) אם עדיין חסר – שאלה
+    if "type" not in s:
+        return ("איזה סוג אפליקציה לבנות? (web / cli / mobile / desktop)", s)
+
+    # 4) stack ברירת מחדל
+    if s["type"] == "web": s.setdefault("stack","python_web")
+    elif s["type"] == "cli": s.setdefault("stack","python_app")
+    elif s["type"] in ("mobile","desktop"):
+        return (f"מוכן. לפיתוח {s['type']} צריך SDKs (Android/iOS/Unity). כרגע זמינה רק WEB/CLI. להמשיך ב-web/CLI זמינה?", s)
+
+    # 5) אישור סופי
+    return (f"מצוין. אבנה '{s['name']}' מסוג {s['type']} (stack: {s['stack']}). לאשר?", s)

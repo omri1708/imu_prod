@@ -1,10 +1,9 @@
-# integration/llm_client.py
 from __future__ import annotations
 import os, requests
 
 class LLMClient:
     def __init__(self):
-        self.provider = os.getenv("LLM_PROVIDER","openai")   # openai|openrouter|anthropic
+        self.provider = os.getenv("LLM_PROVIDER","openai")   # openai|openrouter|anthropic|openai-compatible|azure-openai
         self.model    = os.getenv("LLM_MODEL","gpt-4o-mini")
         self.api_key  = os.getenv("LLM_API_KEY")
         self.api_base = os.getenv("LLM_API_BASE","https://api.openai.com")
@@ -24,10 +23,10 @@ class LLMClient:
             url = self.api_base.rstrip("/") + "/v1/messages"
             headers = {"x-api-key": self.api_key, "anthropic-version": self.anthropic_version,
                        "content-type":"application/json"}
-            sys = next((m["content"] for m in messages if m["role"]=="system"), None)
+            sys  = next((m["content"] for m in messages if m["role"]=="system"), None)
             user = next((m["content"] for m in messages if m["role"]=="user"), "")
             payload = {"model": self.model, "max_tokens": max_tokens,
-                       "messages":[{"role":"user","content": user}],"system": sys}
+                       "messages":[{"role":"user","content": user}], "system": sys}
             r = requests.post(url, headers=headers, json=payload, timeout=60); r.raise_for_status()
             data = r.json()
             return "".join(b.get("text","") for b in data.get("content",[]) if b.get("type")=="text")

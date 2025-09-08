@@ -8,13 +8,38 @@ import re
 from grounded.evidence_store import EvidenceStore
 
 
-ROOT = "/mnt/data/imu_repo"
-STORE = "/mnt/data/imu_repo/.provenance"
+def _pick_root() -> str:
+    """
+    בוחר שורש כתיב ללא כתיבה בזמן import:
+    1) IMU_ROOT אם הוגדר והוא כתיב
+    2) ./assurance_store_text
+    3) תיקיית הפרויקט (dir של הקובץ הזה ../)
+    4) cwd
+    """
+    env = os.environ.get("IMU_ROOT")
+    candidates = []
+    if env:
+        candidates.append(os.path.abspath(env))
+    candidates.append(os.path.abspath("./assurance_store_text"))
+    candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    candidates.append(os.getcwd())
+    for c in candidates:
+        try:
+            os.makedirs(c, exist_ok=True)
+            return c
+        except Exception:
+            continue
+    return os.getcwd()
+
+ROOT = _pick_root()
+STORE = os.path.join(ROOT, ".provenance")
 LOGS = os.path.join(ROOT, "logs")
 PROV_LOG = os.path.join(LOGS, "provenance.jsonl")
 
-os.makedirs(STORE, exist_ok=True)
-os.makedirs(LOGS, exist_ok=True)
+def _ensure_dirs():
+    # יצירה עצלה בזמן ריצה, לא בזמן import
+    os.makedirs(STORE, exist_ok=True)
+    os.makedirs(LOGS, exist_ok=True)
 
 
 def _canonical(d: Dict[str,Any]) -> bytes:
@@ -48,6 +73,7 @@ def persist_record(record: Dict[str,Any]) -> str:
     שומר JSON עם שם הקובץ לפי sha256 (CAS) + רושם שורת audit.
     מחזיר נתיב הקובץ.
     """
+    _ensure_dirs
     sha = record["sha256"]
     path = os.path.join(STORE, f"{sha}.json")
     if not os.path.exists(path):
@@ -132,8 +158,8 @@ class ProvenanceStore:
     """
     Content-addressable evidence with minimal signing (HMAC over bytes).
     """
-    def __init__(self, root_dir: str):
-        self.root = root_dir
+    def __init__(self, root_dir: str | None = None):
+        self.root = os.path.abspath(root_dir or STORE)
         os.makedirs(self.root, exist_ok=True)
         self.key_path = os.path.join(root_dir, ".hmac_key")
         if not os.path.exists(self.key_path):

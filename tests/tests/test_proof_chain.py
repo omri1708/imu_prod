@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json
+import os
 from engine.respond_guard import ensure_proof_and_package, RespondBlocked
 
 def test_block_without_claims_when_required(tmp_path):

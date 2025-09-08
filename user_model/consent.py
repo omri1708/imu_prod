@@ -7,9 +7,6 @@ from privacy.storage import save_json_encrypted, load_json_encrypted
 
 CONSENT_FN = "consent.json"
 
-from __future__ import annotations
-from typing import Dict, Any
-
 
 DEFAULT = {
     "analytics": False,

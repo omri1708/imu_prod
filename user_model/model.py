@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, json, time, base64, hashlib
+import os, json, time, base64, hashlib, threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+# -*- coding: utf-8 -*-
+
+ROOT = "./assurance_store_users"
+os.makedirs(ROOT, exist_ok=True)
+_lock = threading.RLock()
+
+def _path(uid: str) -> str:
+    return os.path.join(ROOT, f"{uid}.json")
+
 
 def now() -> float: return time.time()
 
@@ -48,9 +58,30 @@ class UserStore:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.crypto = _Crypto(secret)
+    """אחסון פרופיל/פרסונה/מצב משתמש כ-JSON לקובץ אחד פר משתמש."""
+ 
+    def get(self, uid: str) -> Dict[str, Any]:
+        p = _path(uid)
+        if not os.path.exists(p):
+            return {"uid": uid, "profile": {}, "persona": {}, "prefs": {}, "stats": {}}
+        try:
+            return json.loads(open(p, "r", encoding="utf-8").read())
+        except Exception:
+            return {"uid": uid, "profile": {}, "persona": {}, "prefs": {}, "stats": {}}
 
-    def _path(self, uid: str) -> Path:
-        return self.root / f"{_sha256(uid.encode())}.jsonl"
+    def set(self, uid: str, data: Dict[str, Any]) -> None:
+        with _lock:
+            open(_path(uid), "w", encoding="utf-8").write(json.dumps(data, ensure_ascii=False, indent=2))
+
+    def upsert_persona(self, uid: str, persona_patch: Dict[str, Any]) -> Dict[str, Any]:
+        with _lock:
+            st = self.get(uid)
+            p = st.get("persona") or {}
+            p.update(persona_patch or {})
+            st["persona"] = p
+            st["persona_ts"] = int(time.time()*1000)
+            self.set(uid, st)
+            return p
 
     def append(self, uid: str, record: Dict[str,Any]):
         p = self._path(uid)

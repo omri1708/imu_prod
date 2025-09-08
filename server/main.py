@@ -9,11 +9,10 @@ from pathlib import Path
 from server.policy.enforcement import CapabilityPolicy, CapabilityRequest, PolicyError
 from server.capabilities.registry import capability_registry
 from server.events.bus import EventBus, Topic
-from server.pipeline.run_adapter import run_adapter, DryRunError
+from server.pipeline.run_adapter import DryRunError
 from server.security.audit import audit_log
-from server.security.provenance import ProvenanceStore
+from server.security.provenance import ProvenanceStore as seProvenanceStore
 from server.state.ttl import TTLRules
-from fastapi import FastAPI
 from server.routers.adapters_secure import router as adapters_secure_router
 from server.routers.consent_api import router as consent_router
 from server.routers.respond_api import router as respond_router
@@ -24,7 +23,6 @@ from pydantic import BaseModel, Field
 
 from engine.policy import (
     request_and_continue,
-    CapabilityRequest,
     CapabilityResult,
     UserSpacePolicy,
     evaluate_policy_for_user,
@@ -86,11 +84,16 @@ def capabilities_request(req: CapabilityRequest):
 
 def _get_adapter_impl(name: str):
     name = name.lower()
-    if name == "android": return android.AndroidAdapter()
-    if name == "ios": return ios.IOSAdapter()
-    if name == "unity": return unity.UnityAdapter()
-    if name == "cuda": return cuda.CUDAAdapter()
-    if name == "k8s": return k8s.K8sAdapter()
+    if name == "android":
+        return android.AndroidAdapter()
+    if name == "ios":
+        return ios.IOSAdapter()
+    if name == "unity":
+        return unity.UnityAdapter()
+    if name == "cuda":
+        return cuda.CUDAAdapter()
+    if name == "k8s":
+        return k8s.K8sAdapter()
     raise HTTPException(400, f"unknown adapter: {name}")
 
 @app.post("/run_adapter", response_model=AdapterRunResult)
@@ -141,7 +144,7 @@ def run_adapter(plan: AdapterPlan):
 # Singletons (in real deployment: DI container)
 EVENT_BUS = EventBus()
 POLICY = CapabilityPolicy()
-PROV = ProvenanceStore(base_dir=Path("./var/provenance"))
+PROV = seProvenanceStore(base_dir=Path("./var/provenance"))
 TTL = TTLRules()
 
 @app.get("/")

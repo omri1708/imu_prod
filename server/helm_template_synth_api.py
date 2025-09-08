@@ -1,463 +1,192 @@
-# server/helm_template_synth_api.py
-# Helm Chart generator: spec → chart under helm/generated/<slug>/ with Chart.yaml, values.yaml, templates/*.yaml
-# Supports: Ingress / ServiceMonitor / NetworkPolicy (profiles) / IngressClass / cert-manager Issuer/Certificate
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, List
-from pathlib import Path
-import json, re
+from typing import List, Optional, Dict
+from fastapi import APIRouter, Body
+from fastapi.responses import PlainTextResponse
 
-from server.scheduler_api import _http_call  # reuse HTTP helper
+# תואם Pydantic v1 (כפי שהצמדנו בדוקר)
+try:
+    from pydantic import BaseModel, Field
+except Exception:  # אם יש התקנה חלופית של v2
+    from pydantic.v1 import BaseModel, Field  # type: ignore
 
-router = APIRouter(prefix="/helm/synth", tags=["helm-synth"])
-ROOT = Path("helm/generated")
-ROOT.mkdir(parents=True, exist_ok=True)
+router = APIRouter(prefix="/helm", tags=["helm-synth"])
 
-def _slug(s:str)->str:
-    return re.sub(r"[^a-z0-9\-]+","-", s.lower()).strip("-")
+class EnvVar(BaseModel):
+    name: str = Field(..., min_length=1)
+    value: str = ""
 
-class ChartImage(BaseModel):
-    repository: str
-    tag: str = "latest"
-    pullPolicy: str = "IfNotPresent"
+class Resources(BaseModel):
+    limits: Optional[Dict[str, str]] = None
+    requests: Optional[Dict[str, str]] = None
 
-class IngressSpec(BaseModel):
-    enabled: bool = False
-    className: Optional[str] = None
+class HelmSpec(BaseModel):
+    chart_name: str = Field(..., min_length=1)
+    app_name: str = Field(..., min_length=1)
+    image: str = Field(..., min_length=1)
+    replicas: int = 1
+    container_port: int = 8000
+    env: Optional[List[EnvVar]] = None
+    resources: Optional[Resources] = None
+    service: bool = True
+    service_type: str = "ClusterIP"   # ClusterIP | NodePort | LoadBalancer
+    service_port: int = 80
+    ingress: bool = False
     host: Optional[str] = None
     path: str = "/"
-    tlsSecret: Optional[str] = None
-    annotations: Dict[str,str] = {}
 
-class IngressClassSpec(BaseModel):
-    enabled: bool = False
-    name: str = "nginx"
-    controller: str = "k8s.io/ingress-nginx"
+def _chart_yaml(spec: HelmSpec) -> str:
+    lines: List[str] = []
+    lines.append("apiVersion: v2")
+    lines.append("name: " + spec.chart_name)
+    lines.append("type: application")
+    lines.append("version: 0.1.0")
+    lines.append('appVersion: "1.0.0"')
+    return "\n".join(lines)
 
-class ServiceMonitorSpec(BaseModel):
-    enabled: bool = False
-    scrapePort: int = 80
-    interval: str = "30s"
-    path: str = "/metrics"
-    scheme: str = "http"
-    labels: Dict[str,str] = {}
+def _values_yaml(spec: HelmSpec) -> str:
+    lines: List[str] = []
+    lines.append('nameOverride: ""')
+    lines.append('fullnameOverride: ""')
+    lines.append("")
+    lines.append("image:")
+    lines.append("  repository: " + spec.image)
+    lines.append("  pullPolicy: IfNotPresent")
+    lines.append("")
+    lines.append("replicaCount: " + str(spec.replicas))
+    lines.append("")
+    lines.append("service:")
+    lines.append("  type: " + spec.service_type)
+    lines.append("  port: " + str(spec.service_port))
+    lines.append("")
+    lines.append("containerPort: " + str(spec.container_port))
+    lines.append("")
+    if spec.env:
+        lines.append("env:")
+        for ev in spec.env:
+            safe_val = (ev.value or "").replace('"', '\\"')
+            lines.append("  - name: " + ev.name)
+            lines.append('    value: "' + safe_val + '"')
+        lines.append("")
+    if spec.resources and (spec.resources.limits or spec.resources.requests):
+        lines.append("resources:")
+        if spec.resources.limits:
+            lines.append("  limits:")
+            for k, v in spec.resources.limits.items():
+                lines.append(f"    {k}: {v}")
+        if spec.resources.requests:
+            lines.append("  requests:")
+            for k, v in spec.resources.requests.items():
+                lines.append(f"    {k}: {v}")
+        lines.append("")
+    # ingress ערכים
+    lines.append("ingress:")
+    if spec.ingress and spec.host:
+        lines.append("  enabled: true")
+        lines.append('  className: ""')
+        lines.append("  hosts:")
+        lines.append("    - host: " + spec.host)
+        lines.append("      paths:")
+        lines.append("        - path: " + (spec.path or "/"))
+        lines.append("          pathType: Prefix")
+        lines.append("  tls: []")
+    else:
+        lines.append("  enabled: false")
+    return "\n".join(lines)
 
-class NetworkPolicySpec(BaseModel):
-    enabled: bool = False
-    profile: str = Field("standard", regex="^(strict|standard|lenient)$")
-    allowSameNamespace: bool = True
-    ingressCidrs: list[str] = []
-    egressCidrs: list[str] = []
+def _deployment_template(spec: HelmSpec) -> str:
+    # חשוב: פה אין שימוש ב-f-strings עם {{ }} כדי שלא יישבר פייתון; אלו מחרוזות רגילות.
+    L = []
+    L.append("apiVersion: apps/v1")
+    L.append("kind: Deployment")
+    L.append("metadata:")
+    L.append("  name: {{ .Chart.Name }}")
+    L.append("  labels:")
+    L.append("    app.kubernetes.io/name: {{ .Chart.Name }}")
+    L.append("    app.kubernetes.io/instance: {{ .Release.Name }}")
+    L.append("spec:")
+    L.append("  replicas: {{ .Values.replicaCount }}")
+    L.append("  selector:")
+    L.append("    matchLabels:")
+    L.append("      app.kubernetes.io/name: {{ .Chart.Name }}")
+    L.append("  template:")
+    L.append("    metadata:")
+    L.append("      labels:")
+    L.append("        app.kubernetes.io/name: {{ .Chart.Name }}")
+    L.append("        app.kubernetes.io/instance: {{ .Release.Name }}")
+    L.append("    spec:")
+    L.append("      containers:")
+    L.append("        - name: " + spec.app_name)
+    L.append('          image: "{{ .Values.image.repository }}"')
+    L.append("          ports:")
+    L.append("            - containerPort: {{ .Values.containerPort }}")
+    # env
+    L.append("          env:")
+    L.append("          {{- if .Values.env }}")
+    L.append("          {{- range .Values.env }}")
+    L.append('            - name: {{ .name | quote }}')
+    L.append('              value: {{ .value | quote }}')
+    L.append("          {{- end }}")
+    L.append("          {{- end }}")
+    # resources
+    L.append("          resources:")
+    L.append("          {{- toYaml .Values.resources | nindent 10 }}")
+    return "\n".join(L)
 
-class CertManagerSpec(BaseModel):
-    enabled: bool = False
-    issuerKind: str = Field("Issuer", regex="^(Issuer|ClusterIssuer)$")
-    issuerName: str = "selfsigned"
-    issuerNamespace: Optional[str] = None
-    certificateSecretName: Optional[str] = None
-    dnsNames: list[str] = []
+def _service_template() -> str:
+    L = []
+    L.append("apiVersion: v1")
+    L.append("kind: Service")
+    L.append("metadata:")
+    L.append("  name: {{ .Chart.Name }}")
+    L.append("spec:")
+    L.append("  type: {{ .Values.service.type }}")
+    L.append("  selector:")
+    L.append("    app.kubernetes.io/name: {{ .Chart.Name }}")
+    L.append("  ports:")
+    L.append("    - port: {{ .Values.service.port }}")
+    L.append("      targetPort: {{ .Values.containerPort }}")
+    return "\n".join(L)
 
-class ChartSpec(BaseModel):
-    name: str
-    version: str = "0.1.0"
-    appVersion: str = "1.0.0"
-    namespace: str = "default"
-    release: str = "release"
-    serviceType: str = Field("ClusterIP", regex="^(ClusterIP|NodePort|LoadBalancer)$")
-    replicas: int = 2
-    containerPort: int = 80
-    image: ChartImage
-    env: Dict[str,str] = {}
-    resources: Dict[str,str] = {}
-    hpa: bool = False
-    hpaMin: int = 2
-    hpaMax: int = 10
-    hpaCpu: int = 80
-    ingress: IngressSpec = IngressSpec()
-    ingressClass: IngressClassSpec = IngressClassSpec()
-    serviceMonitor: ServiceMonitorSpec = ServiceMonitorSpec()
-    networkPolicy: NetworkPolicySpec = NetworkPolicySpec()
-    certManager: CertManagerSpec = CertManagerSpec()
+def _ingress_template() -> str:
+    L = []
+    L.append("apiVersion: networking.k8s.io/v1")
+    L.append("kind: Ingress")
+    L.append("metadata:")
+    L.append("  name: {{ .Chart.Name }}")
+    L.append("spec:")
+    L.append("  rules:")
+    L.append("    - host: {{ (index .Values.ingress.hosts 0).host | default \"\" }}")
+    L.append("      http:")
+    L.append("        paths:")
+    L.append("          - path: {{ (index (index .Values.ingress.hosts 0).paths 0).path | default \"/\" }}")
+    L.append("            pathType: Prefix")
+    L.append("            backend:")
+    L.append("              service:")
+    L.append("                name: {{ .Chart.Name }}")
+    L.append("                port:")
+    L.append("                  number: {{ .Values.service.port }}")
+    return "\n".join(L)
 
-def chart_yaml(s:ChartSpec)->str:
-    return f"""apiVersion: v2
-name: {s.name}
-description: Auto-generated chart
-type: application
-version: {s.version}
-appVersion: "{s.appVersion}"
-"""
+def render_helm_chart(spec: HelmSpec) -> str:
+    """
+    מחזיר טקסט אחד שמייצג את כל קבצי הצ'ארט, עם מפרידי קבצים.
+    זה נוח להדבקה/שמירה; אפשר לפצל אחר כך לפי הכותרות.
+    """
+    parts: List[str] = []
+    parts.append("# file: Chart.yaml\n" + _chart_yaml(spec))
+    parts.append("# file: values.yaml\n" + _values_yaml(spec))
+    parts.append("# file: templates/deployment.yaml\n" + _deployment_template(spec))
+    parts.append("# file: templates/service.yaml\n" + _service_template())
+    if spec.ingress and spec.host:
+        parts.append("# file: templates/ingress.yaml\n" + _ingress_template())
+    return "\n---\n".join(parts) + "\n"
 
-def values_yaml(s:ChartSpec)->str:
-    env = "\n".join([f"  - name: {k}\n    value: \"{v}\"" for k,v in (s.env or {}).items()])
-    res = ""
-    if s.resources:
-        res = "  resources:\n    requests:\n" + "".join([f"      {k}: {v}\n" for k,v in s.resources.items()])
-    ingress = f"""
-ingress:
-  enabled: {str(s.ingress.enabled).lower()}
-  className: {json.dumps(s.ingress.className) if s.ingress.className else 'null'}
-  host: {json.dumps(s.ingress.host) if s.ingress.host else 'null'}
-  path: {json.dumps(s.ingress.path)}
-  tlsSecret: {json.dumps(s.ingress.tlsSecret) if s.ingress.tlsSecret else 'null'}
-  annotations:
-{''.join([f'    {k}: \"{v}\"\n' for k,v in s.ingress.annotations.items()]) if s.ingress.annotations else '    {}'}
-"""
-    ingress_class = f"""
-ingressClass:
-  enabled: {str(s.ingressClass.enabled).lower()}
-  name: {json.dumps(s.ingressClass.name)}
-  controller: {json.dumps(s.ingressClass.controller)}
-"""
-    sm = f"""
-serviceMonitor:
-  enabled: {str(s.serviceMonitor.enabled).lower()}
-  scrapePort: {s.serviceMonitor.scrapePort}
-  interval: "{s.serviceMonitor.interval}"
-  path: "{s.serviceMonitor.path}"
-  scheme: "{s.serviceMonitor.scheme}"
-  labels:
-{''.join([f'    {k}: \"{v}\"\n' for k,v in s.serviceMonitor.labels.items()]) if s.serviceMonitor.labels else '    {}'}
-"""
-    np = f"""
-networkPolicy:
-  enabled: {str(s.networkPolicy.enabled).lower()}
-  profile: {json.dumps(s.networkPolicy.profile)}
-  allowSameNamespace: {str(s.networkPolicy.allowSameNamespace).lower()}
-  ingressCidrs:
-{''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.ingressCidrs]) if s.networkPolicy.ingressCidrs else '    []'}
-  egressCidrs:
-{''.join([f'    - {cidr}\n' for cidr in s.networkPolicy.egressCidrs]) if s.networkPolicy.egressCidrs else '    []'}
-"""
-    cm = f"""
-certManager:
-  enabled: {str(s.certManager.enabled).lower()}
-  issuerKind: {json.dumps(s.certManager.issuerKind)}
-  issuerName: {json.dumps(s.certManager.issuerName)}
-  issuerNamespace: {json.dumps(s.certManager.issuerNamespace) if s.certManager.issuerNamespace else 'null'}
-  certificateSecretName: {json.dumps(s.certManager.certificateSecretName) if s.certManager.certificateSecretName else 'null'}
-  dnsNames:
-{''.join([f'    - {json.dumps(n)}\n' for n in s.certManager.dnsNames]) if s.certManager.dnsNames else '    []'}
-"""
-    return f"""namespace: {s.namespace}
-replicaCount: {s.replicas}
-service:
-  type: {s.serviceType}
-  port: {s.containerPort}
-image:
-  repository: {s.image.repository}
-  tag: {s.image.tag}
-  pullPolicy: {s.image.pullPolicy}
-container:
-  port: {s.containerPort}
-{('env:\n'+env) if env else ''}
-{res}
-hpa:
-  enabled: {str(s.hpa).lower()}
-  min: {s.hpaMin}
-  max: {s.hpaMax}
-  cpu: {s.hpaCpu}
-{ingress_class}
-{ingress}
-{sm}
-{np}
-{cm}
-"""
-
-def tpl_helpers(name:str)->str:
-    return f"""{{{{- define "{name}.name" -}}}}
-{{{{ .Chart.Name }}}}
-{{{{- end -}}}}
-
-{{{{- define "{name}.fullname" -}}}}
-{{{{ include "{name}.name" . }}}}-{{{{ .Release.Name }}}}
-{{{{- end -}}}}
-"""
-
-def tpl_deployment(name:str)->str:
-    return f"""apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-spec:
-  replicas: {{{{ .Values.replicaCount }}}}
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-    spec:
-      containers:
-      - name: app
-        image: "{{{{ .Values.image.repository }}}}:{{{{ .Values.image.tag }}}}"
-        imagePullPolicy: "{{{{ .Values.image.pullPolicy }}}}"
-        ports:
-        - containerPort: {{{{ .Values.container.port }}}}
-{{{{- if .Values.env }}}}
-        env:
-{{{{ toYaml .Values.env | indent 8 }}}}
-{{{{- end }}}}
-{{{{- if .Values.resources }}}}
-{{{{ toYaml .Values.resources | indent 8 }}}}
-{{{{- end }}}}
-"""
-
-def tpl_service(name:str)->str:
-    return f"""apiVersion: v1
-kind: Service
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-svc
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-  labels:
-    app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-spec:
-  type: {{{{ .Values.service.type }}}}
-  selector:
-    app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-  ports:
-  - name: http
-    port: {{{{ .Values.service.port }}}}
-    targetPort: {{{{ .Values.container.port }}}}
-"""
-
-def tpl_hpa(name:str)->str:
-    return f"""{{{{- if .Values.hpa.enabled }}}}
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-hpa
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: {{{{ include "{name}.fullname" . }}}}
-  minReplicas: {{{{ .Values.hpa.min }}}}
-  maxReplicas: {{{{ .Values.hpa.max }}}}
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: {{{{ .Values.hpa.cpu }}}}
-{{{{- end }}}}
-"""
-
-def tpl_ingressclass(name:str)->str:
-    return f"""{{{{- if .Values.ingressClass.enabled }}}}
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: {{{{ .Values.ingressClass.name }}}}
-spec:
-  controller: {{{{ .Values.ingressClass.controller }}}}
-{{{{- end }}}}
-"""
-
-def tpl_ingress(name:str)->str:
-    return f"""{{{{- if .Values.ingress.enabled }}}}
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-ing
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-  annotations:
-{{{{- if .Values.ingress.annotations }}}}
-{{{{ toYaml .Values.ingress.annotations | indent 4 }}}}
-{{{{- else }}}}
-    {{}}
-{{{{- end }}}}
-spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{{{ .Values.ingress.className }}}}
-  {{- end }}
-  rules:
-  - host: {{{{ .Values.ingress.host }}}}
-    http:
-      paths:
-      - path: {{{{ .Values.ingress.path }}}}
-        pathType: Prefix
-        backend:
-          service:
-            name: {{{{ include "{name}.fullname" . }}}}-svc
-            port:
-              number: {{{{ .Values.service.port }}}}
-  {{- if .Values.ingress.tlsSecret }}
-  tls:
-  - hosts:
-    - {{{{ .Values.ingress.host }}}}
-    secretName: {{{{ .Values.ingress.tlsSecret }}}}
-  {{- end }}
-{{{{- end }}}}
-"""
-
-def tpl_service_monitor(name:str)->str:
-    return f"""{{{{- if .Values.serviceMonitor.enabled }}}}
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-sm
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-  labels:
-{{{{ toYaml .Values.serviceMonitor.labels | indent 4 }}}}
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-  endpoints:
-  - port: http
-    interval: {{{{ .Values.serviceMonitor.interval }}}}
-    path: {{{{ .Values.serviceMonitor.path }}}}
-    scheme: {{{{ .Values.serviceMonitor.scheme }}}}
-{{{{- end }}}}
-"""
-
-def tpl_network_policy(name:str)->str:
-    # מצבי profile: strict/standard/lenient
-    return f"""{{{{- if .Values.networkPolicy.enabled }}}}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-np
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: {{{{ include "{name}.name" . }}}}
-  policyTypes:
-  - Ingress
-  - Egress
-  ingress:
-  - {{}} # default drop depends on cluster policy; add rules below by profile
-  {{- if eq .Values.networkPolicy.profile "strict" }}
-  - from:
-    {{- if .Values.networkPolicy.allowSameNamespace }}
-    - podSelector: {{}}
-    {{- end }}
-    {{- range .Values.networkPolicy.ingressCidrs }}
-    - ipBlock: {{ cidr: {{{{ . }}}} }}
-    {{- end }}
-  {{- else if eq .Values.networkPolicy.profile "standard" }}
-  - from:
-    - podSelector: {{}}
-  {{- else }} # lenient
-  - {{}} # allow all
-  {{- end }}
-  egress:
-  - {{}} # base rule
-  {{- if eq .Values.networkPolicy.profile "strict" }}
-  - to:
-    {{- range .Values.networkPolicy.egressCidrs }}
-    - ipBlock: {{ cidr: {{{{ . }}}} }}
-    {{- end }}
-  {{- else if eq .Values.networkPolicy.profile "standard" }}
-  - {{}} # allow cluster DNS/metadata left to cluster defaults
-  {{- else }}
-  - {{}} # allow all
-  {{- end }}
-{{{{- end }}}}
-"""
-
-def tpl_cert_issuer(name:str)->str:
-    return f"""{{{{- if and .Values.certManager.enabled (eq .Values.certManager.issuerKind "Issuer") }}}}
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: {{{{ .Values.certManager.issuerName }}}}
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-spec:
-  selfSigned: {{}}
-{{{{- end }}}}
-{{{{- if and .Values.certManager.enabled (eq .Values.certManager.issuerKind "ClusterIssuer") }}}}
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: {{{{ .Values.certManager.issuerName }}}}
-spec:
-  selfSigned: {{}}
-{{{{- end }}}}
-"""
-
-def tpl_cert_certificate(name:str)->str:
-    return f"""{{{{- if .Values.certManager.enabled }}}}
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: {{{{ include "{name}.fullname" . }}}}-crt
-  namespace: {{{{ .Values.namespace | default .Release.Namespace }}}}
-spec:
-  secretName: {{{{ .Values.certManager.certificateSecretName | default (printf "%s-crt" (include "{name}.fullname" .)) }}}}
-  issuerRef:
-    name: {{{{ .Values.certManager.issuerName }}}}
-    kind: {{{{ .Values.certManager.issuerKind }}}}
-  dnsNames:
-  {{- range .Values.certManager.dnsNames }}
-  - {{{{ . }}}}
-  {{- end }}
-{{{{- end }}}}
-"""
-
-@router.post("/create")
-def create(spec: ChartSpec):
-    slug=_slug(spec.name)
-    base=ROOT/slug; (base/"templates").mkdir(parents=True, exist_ok=True)
-    (base/"Chart.yaml").write_text(chart_yaml(spec), encoding="utf-8")
-    (base/"values.yaml").write_text(values_yaml(spec), encoding="utf-8")
-    (base/"templates"/"_helpers.tpl").write_text(tpl_helpers(spec.name), encoding="utf-8")
-    (base/"templates"/"deployment.yaml").write_text(tpl_deployment(spec.name), encoding="utf-8")
-    (base/"templates"/"service.yaml").write_text(tpl_service(spec.name), encoding="utf-8")
-    (base/"templates"/"hpa.yaml").write_text(tpl_hpa(spec.name), encoding="utf-8")
-    (base/"templates"/"ingressclass.yaml").write_text(tpl_ingressclass(spec.name), encoding="utf-8")
-    (base/"templates"/"ingress.yaml").write_text(tpl_ingress(spec.name), encoding="utf-8")
-    (base/"templates"/"servicemonitor.yaml").write_text(tpl_service_monitor(spec.name), encoding="utf-8")
-    (base/"templates"/"networkpolicy.yaml").write_text(tpl_network_policy(spec.name), encoding="utf-8")
-    (base/"templates"/"issuer.yaml").write_text(tpl_cert_issuer(spec.name), encoding="utf-8")
-    (base/"templates"/"certificate.yaml").write_text(tpl_cert_certificate(spec.name), encoding="utf-8")
-    (base/"contract.json").write_text(json.dumps({"title":"Values","type":"object"}, indent=2), encoding="utf-8")
-    (base/"README.md").write_text(f"# {spec.name} (Helm chart, auto-generated)\nWith Ingress/IngressClass/ServiceMonitor/NetworkPolicy/Certificate.\n", encoding="utf-8")
-    return {"ok": True, "slug": slug, "dir": str(base), "release": spec.release, "namespace": spec.namespace}
-
-@router.get("/list")
-def list_charts():
-    items=[]
-    for d in ROOT.glob("*/Chart.yaml"):
-        items.append({"slug": d.parent.name, "dir": str(d.parent)})
-    return {"ok": True, "items": items}
-
-@router.post("/dry_template")
-def dry_template(slug: str, name: str, values_file: Optional[str] = None):
-    base=ROOT/slug
-    if not base.exists(): raise HTTPException(404,"not found")
-    vf = values_file or str(base/"values.yaml")
-    body={"user_id":"demo-user","kind":"helm.template","params":{"name": name, "chart_dir": str(base), "values_file": vf}}
-    j=_http_call("POST","/adapters/dry_run", body)
-    return {"ok": bool(j.get("ok")), "cmd": j.get("cmd","")}
-
-@router.post("/upgrade")
-def upgrade(slug: str, release: str, namespace: str = "default", values_file: Optional[str] = None, execute: bool = False):
-    base=ROOT/slug
-    if not base.exists(): raise HTTPException(404,"not found")
-    vf = values_file or str(base/"values.yaml")
-    body={"user_id":"demo-user","kind":"helm.upgrade","params":{"release":release,"chart_dir":str(base),"namespace":namespace,"values_file":vf,"extra_opt":""},"execute": execute}
-    j=_http_call("POST","/adapters/run", body)
-    return {"ok": bool(j.get("ok")), "reason": j.get("reason"), "cmd": j.get("cmd")}
-
-@router.get("/get")
-def get_template(slug: str):
-    base=ROOT/slug
-    if not base.exists(): raise HTTPException(404,"not found")
-    files={}
-    for n in ("Chart.yaml","values.yaml",
-              "templates/_helpers.tpl","templates/deployment.yaml","templates/service.yaml",
-              "templates/hpa.yaml","templates/ingressclass.yaml","templates/ingress.yaml",
-              "templates/servicemonitor.yaml","templates/networkpolicy.yaml",
-              "templates/issuer.yaml","templates/certificate.yaml",
-              "contract.json","README.md"):
-        p=base/n
-        if p.exists(): files[str(n)] = p.read_text(encoding="utf-8")
-    return {"ok": True, "files": files}
+@router.post("/template/synth", response_class=PlainTextResponse)
+def synth_chart(spec: HelmSpec = Body(...)) -> PlainTextResponse:
+    """
+    הפקת Chart בסיסי של Helm (Chart.yaml / values.yaml / templates/*.yaml) מטופס JSON.
+    החזרה היא טקסט (text/plain) שניתן לשמור כקבצים לפי הכותרות (# file: ...).
+    """
+    txt = render_helm_chart(spec)
+    return PlainTextResponse(content=txt, media_type="text/plain")

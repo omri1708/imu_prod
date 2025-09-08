@@ -1,8 +1,7 @@
 # imu_repo/engine/respond_bridge.py
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Callable
-from engine.proof_chain import emit_with_proof
-from engine.respond_guard import RespondBlocked
+from engine.respond_guard import ensure_proof_and_package, RespondBlocked
 from engine.audit_log import record_event
 
 def _extract_ctx_claims(ctx: Optional[Dict[str,Any]]) -> List[Dict[str,Any]]:
@@ -68,7 +67,7 @@ def respond_with_required_proof(
     fetcher = _resolve_http_fetcher(explicit_fetcher=http_fetcher, ctx=ctx, policy=p)
 
     try:
-        pack = emit_with_proof(
+        pack = ensure_proof_and_package(
             response_text=response_text,
             claims=claims,
             policy=p,

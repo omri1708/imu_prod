@@ -9,11 +9,12 @@ from server.routers.consent_api import router as consent_router
 from server.routers.adapters_secure import router as adapters_secure_router
 from server.routers.respond_api import router as respond_router
 from server.routers.program_api import router as program_router
-
+from server.routers.orchestrate_api import router as orchestrate_router
 from server.routers.chat_api import router as chat_api_router  # שרת השיחה
 from learning.supervisor import LearningSupervisor
-
+from engine.pipeline_events import AUDIT as _ensure_pipeline_events  # noqa: F401
 APP = FastAPI(title="IMU Core (Chat)")
+
 
 # מחברים יכולות
 APP.include_router(consent_router)
@@ -21,6 +22,7 @@ APP.include_router(adapters_secure_router)
 APP.include_router(respond_router)
 APP.include_router(program_router)
 APP.include_router(chat_api_router)  # /chat/send (API)
+APP.include_router(orchestrate_router)
 
 # דף הבית = /chat/
 @APP.get("/", include_in_schema=False)

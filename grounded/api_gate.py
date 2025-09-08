@@ -4,7 +4,7 @@ from typing import Dict, Any, Tuple
 import urllib.request, json, time, ssl
 from urllib.parse import urlencode
 from grounded.source_policy import policy_singleton as SourcePolicy
-from synth.schema_validate import validate_json_schema  # קיים משלב 36
+from contracts.schema import validate_schema  # קיים משלב 36
 from audit.cas import put_bytes
 from audit.provenance_store import record_evidence
 
@@ -70,7 +70,7 @@ class OfficialAPIGate:
         except Exception as e:
             raise ApiGateError(f"bad_json:{e}")
         # סכימה
-        ok, errors = validate_json_schema(data, json_schema)
+        ok, errors = validate_schema(data, json_schema)
         if not ok:
             raise ApiGateError(f"schema_failed:{errors}")
         # בדיקת הטענה

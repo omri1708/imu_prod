@@ -266,7 +266,6 @@ class ProvenanceStore:
     def __init__(self):
         self._by_hash: Dict[str, Evidence] = {}
         self._by_uri: Dict[str, str] = {}  # uri -> sha256
-
     def put(self, ev: Evidence) -> str:
         h = ev.sha256
         self._by_hash[h] = ev
@@ -279,7 +278,7 @@ class ProvenanceStore:
     def get_by_uri(self, uri: str) -> Optional[Evidence]:
         h = self._by_uri.get(uri)
         return self._by_hash.get(h) if h else None
-
+    
 # -------- TTL ledger (per-user subspace) --------
 
 class TTLIndex:

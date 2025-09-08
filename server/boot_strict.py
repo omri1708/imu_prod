@@ -4,6 +4,7 @@ import os, contextlib, importlib, pkgutil, asyncio, tempfile, json
 from typing import Dict, Any, List
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse, FileResponse, PlainTextResponse, JSONResponse
+from engine.pipeline_events import AUDIT as _ensure_pipeline_events  # noqa: F401
 
 APP = FastAPI(title="IMU • Full System (STRICT)")
 

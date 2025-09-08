@@ -1,9 +1,15 @@
 # imu_repo/adapters/http_fetch.py
 from __future__ import annotations
-import urllib.request, urllib.parse, ssl, socket, Request, urlopen
-import ssl, time
+import urllib.request
+import urllib.parse
+import ssl
+import socket
+import time
 from typing import Dict, Any, Optional, Tuple
+from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
+import ssl, time
+
 
 class HTTPError(Exception): ...
 
