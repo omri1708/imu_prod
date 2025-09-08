@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Tuple
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse, FileResponse, PlainTextResponse, JSONResponse
+from engine.pipeline_events import AUDIT as _ensure_pipeline_events  # noqa: F401
 
 # ===== UI (שיחה אחת) =====
 APP = FastAPI(title="IMU • Full System")

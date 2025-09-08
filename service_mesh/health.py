@@ -59,7 +59,8 @@ class BackendState:
         ניקוד לבחירה: בריא? כמה עומס? כמה EWMA קטן? כמה זמן עבר מאז תקין?
         גבוה=עדיף.
         """
-        if self.circuit_open(): return -1e9
+        if self.circuit_open():
+            return -1e9
         base = 1.0 if self.healthy else 0.0
         age = time.time() - self.last_ok
         age_bonus = 0.2 if age < 2.0 else 0.0
