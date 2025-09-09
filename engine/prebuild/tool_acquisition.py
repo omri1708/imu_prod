@@ -21,6 +21,7 @@ except Exception:
 CAS = CAStore("var/cas")
 
 ALLOWED_LICENSES = {"MIT","Apache-2.0","BSD-3-Clause","BSD-2-Clause","MPL-2.0"}
+ALLOWED_URL_DOMAINS = {"github.com", "objects.githubusercontent.com", "dl.google.com", "storage.googleapis.com"}
 
 @dataclass
 class ToolSpec:

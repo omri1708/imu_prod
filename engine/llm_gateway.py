@@ -11,6 +11,7 @@ from user_model.model import UserStore
 from engine.llm.cache_integrations import call_llm_with_cache
 from engine.llm.cache import default_cache
 from policy.cite_or_silence import require_citations_or_block
+from engine.llm.bandit_selector import UCBSelector
 
 """
 LLMGateway (hybrid, hardened)
@@ -140,6 +141,11 @@ class LLMGateway:
         self.oa_json_model = _env("IMU_OPENAI_JSON_MODEL", "gpt-4o-mini")
         self.claude_model = _env("IMU_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         self._cache = default_cache()
+        self._arms = [
+        {"name":"gpt-4o-mini", "temp":0.2, "w_cost":0.4, "w_latency":0.3, "w_quality":0.3},
+        {"name":"gpt-4o", "temp":0.7, "w_cost":0.2, "w_latency":0.2, "w_quality":0.6},
+    ]
+        self._ucb = UCBSelector(self._arms)
     # -------------------------------- Persona -----------------------------------------------
     def _persona(self, user_id: str) -> Dict[str, Any]:
         """Return persona dict using both SubjectEngine and UserStore (robust).
