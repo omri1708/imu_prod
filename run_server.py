@@ -1,5 +1,5 @@
 # run_server.py
-from api.http_api import serve_http, GLOBAL_BROKER
+from attic.app.http_api import serve_http, GLOBAL_BROKER
 from api.stream_http import serve_stream
 
 if __name__ == "__main__":

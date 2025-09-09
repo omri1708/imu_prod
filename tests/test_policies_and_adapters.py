@@ -5,7 +5,7 @@ from engine.adapter_runner import enforce_policy, ResourceRequired
 from adapters.contracts import AdapterResult
 from adapters import cuda
 from broker.stream_bus import bus
-from api.http_api import serve
+from attic.app.http_api import serve
 import requests
 
 def test_policy_ttl_allows_after_consent(monkeypatch):

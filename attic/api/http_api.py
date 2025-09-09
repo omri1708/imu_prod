@@ -21,11 +21,11 @@ from broker.stream_bus import bus
 from engine.adapter_runner import enforce_policy, ResourceRequired
 from adapters import android, ios, unity, cuda, k8s
 from adapters.contracts import AdapterResult
-from ..policy.user_policy import UserPolicy
-from ..policy.policy_enforcer import PolicyEnforcer, PolicyViolation
-from ..provenance.castore import ContentAddressableStore
-from ..engine.synthesis_pipeline import SynthesisPipeline
-from ..stream.broker import StreamBroker
+from ...policy.user_policy import UserPolicy
+from ...policy.policy_enforcer import PolicyEnforcer, PolicyViolation
+from ...provenance.castore import ContentAddressableStore
+from ...engine.synthesis_pipeline import SynthesisPipeline
+from ...stream.broker import StreamBroker
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
@@ -295,7 +295,7 @@ class IMUHandler(BaseHTTPRequestHandler):
 
         if self.path == "/capabilities/request":
             # מנסה להתקין/לאפשר יכולת נדרשת, מחזיר outcome מיידי
-            from ..adapters.registry import request_capability_install
+            from ...adapters.registry import request_capability_install
             out = request_capability_install(req.get("capability"), req.get("platform"))
             return self._send(200, out)
 

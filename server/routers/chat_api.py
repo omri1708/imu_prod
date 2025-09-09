@@ -22,6 +22,9 @@ from engine.orchestrator.universal_orchestrator import (
 from user_model.model import UserStore
 from user_model.subject import SubjectEngine
 from grounded.fact_gate import RefusedNotGrounded
+from engine.runtime.approvals import required_approvals
+from engine.blueprints.registry import resolve as resolve_blueprint
+from pathlib import Path
 
 # =====================================================
 #  Chat API Router — Conversation + Grounding + Build
@@ -188,10 +191,10 @@ async def send(body: Dict[str, Any]):
             "grounded": True
         })
 
-    # ======================================
+        # ======================================
     # B) Build path: Discovery → Spec → Refine → Analysis → Execute
     # ======================================
-
+    
     # 1) ניתוח בקשה ראשוני (UniversalPlanner בתוך ה־Orchestrator)
     spec_planner = ORC.analyze(uid, msg, ctx)
 
@@ -223,10 +226,70 @@ async def send(body: Dict[str, Any]):
             "spec": spec_refined,
             "analysis": analysis,
         })
+    # 4.5) Approvals: מה צריך לפני שמתקדמים?
+    req = required_approvals({"tools": spec_refined.get("tools"), "title": spec_refined.get("title"), "summary": spec_refined.get("summary")})
+    if req["tools"] or req["secrets"] or req["licenses"] or req["notes"]:
+    # נבצע מה שאפשר בלי אישורים, ונחזיר למשתמש רשימת דרישות
 
+        pass
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
+    
+    # --- Optional post-build actions for non-technical flow ---
+    persist_dir = body.get("persist")
+    emit_ci     = bool(body.get("emit_ci"))
+    emit_iac    = bool(body.get("emit_iac"))
+    autodeploy  = bool(body.get("autodeploy"))
+    emit_market = bool(body.get("emit_market_scan"))
 
+    written = []
+
+    # 1) Persist generated files (if requested)
+    if persist_dir and isinstance(res.get("build", {}).get("inputs"), dict):
+        files_map = res["build"]["inputs"]           # {path: bytes|str}
+        for rel, data in files_map.items():
+            p = Path(persist_dir) / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            p.write_bytes(data)
+            written.append(str(p))
+
+    # 2) Emit CI workflow
+    if emit_ci:
+        ci_files = resolve_blueprint("ci.github_actions")(spec_refined)
+        for rel, data in ci_files.items():
+            p = Path(persist_dir or ".") / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data if isinstance(data, (bytes, bytearray)) else str(data).encode())
+
+    # 3) Emit Terraform IaC
+    if emit_iac:
+        iac_files = resolve_blueprint("iac.terraform")(spec_refined)
+        for rel, data in iac_files.items():
+            p = Path(persist_dir or ".") / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data if isinstance(data, (bytes, bytearray)) else str(data).encode())
+
+    # 4) Market scan (grounded) – optional
+    if emit_market:
+        try:
+            ms_files = resolve_blueprint("market.scan")(spec_refined | {"context": ctx})
+            for rel, data in ms_files.items():
+                p = Path(persist_dir or ".") / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data if isinstance(data, (bytes, bytearray)) else str(data).encode())
+        except Exception:
+            pass
+
+    # 5) Autodeploy (safe: return script; not executed unless explicitly allowed)
+    deploy_script = []
+    if autodeploy:
+        deploy_script = [
+            "docker compose build && docker compose up -d",
+            "cd infra/terraform && terraform init && terraform apply -auto-approve"
+        ]
+    
     # 6) ניסוח מענה ידידותי למשתמש + החזרת מידע עשיר
     if res.get("ok"):
         txt = "בנוי ✔️"
@@ -239,6 +302,8 @@ async def send(body: Dict[str, Any]):
         "mode": mode,
         "spec": spec_refined,
         "analysis": analysis,
+        "files_written": written,
+        "deploy_script": deploy_script,
         **res  # build, tools, missing, instructions, blueprint, domain...
     }
     return _say(uid, st, txt, extra=extra)

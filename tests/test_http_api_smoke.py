@@ -1,7 +1,7 @@
 # tests/test_http_api_smoke.py
 # -*- coding: utf-8 -*-
 import threading, time, json, urllib.request
-from api.http_api import serve
+from attic.app.http_api import serve
 
 def _start():
     t = threading.Thread(target=lambda: serve("127.0.0.1", 8089), daemon=True)

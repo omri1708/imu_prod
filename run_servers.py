@@ -1,7 +1,7 @@
 # run_servers.py
 import threading
 from streaming.ws_server import WSServer
-from api.http_api import serve_http, broker_for
+from attic.app.http_api import serve_http, broker_for
 
 if __name__ == "__main__":
     ws = WSServer(broker=broker_for)

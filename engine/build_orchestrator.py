@@ -8,6 +8,8 @@ import json
 import os
 import tempfile
 from asyncio.subprocess import PIPE, STDOUT
+from pathlib import Path
+
 
 """
 BuildOrchestrator (hybrid)
@@ -33,6 +35,17 @@ except Exception:  # pragma: no cover
 BytesLike = Union[bytes, str]
 
 
+def _persist_files(files: Dict[str, Any], root: str) -> List[str]:
+    root_p = Path(root)
+    written: List[str] = []
+    for rel, data in files.items():
+        p = root_p / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        p.write_bytes(data)
+        written.append(str(p))
+    return written
 def _decode(b: Optional[bytes]) -> str:
     return (b or b"").decode("utf-8", "ignore")
 
@@ -109,6 +122,7 @@ class BuildOrchestrator:
         timeout_s: Optional[float] = 60.0,
         cpu_seconds: Optional[int] = None,
         mem_mb: Optional[int] = None,
+        persist_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         inputs = _ensure_bytes_map(files)
         py_targets, test_files = _collect_py_targets(inputs)
@@ -146,6 +160,14 @@ class BuildOrchestrator:
             "manifest": manifest,
             "files_built": sorted(py_targets),
         })
+        # Optional persist of generated sources to disk (for non-technical users)
+        if persist_dir and isinstance(inputs, dict):   # 'inputs' = {path: bytes|str}
+            try:
+                written = _persist_files(inputs, persist_dir)
+                result["persist_dir"] = persist_dir
+                result["files_written"] = written
+            except Exception as e:
+                result["persist_error"] = f"{e}"
         return result
 
     # ---------------------------- sandbox runner ----------------------------

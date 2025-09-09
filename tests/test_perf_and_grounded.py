@@ -4,7 +4,7 @@
 import os, time, json, pytest
 from provenance.store import ProvenanceStore
 from policy.user_policy import UserSubspacePolicy
-from engine.http_api import BUS
+from attic.engine.http_api import BUS
 
 def test_provenance_ttl_and_trust():
     prov=ProvenanceStore(root=".imu_test/prov", default_ttl_s=1)
