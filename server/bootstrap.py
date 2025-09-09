@@ -18,6 +18,10 @@ from server.runtime_init import ensure_runtime_dirs
 from server.routers.prebuild_api import router as prebuild_router
 from server.routers.cache_api import router as cache_router
 from server.routers.research_api import router as research_router
+from server.routers.research_api_online import router as research_online_router
+
+
+
 
 
 ensure_runtime_dirs()
@@ -47,6 +51,7 @@ APP.include_router(orchestrate_router)
 APP.include_router(prebuild_router)
 APP.include_router(cache_router)
 APP.include_router(research_router)
+APP.include_router(research_online_router)
 
 # דף הבית = /chat/
 @APP.get("/", include_in_schema=False)

@@ -4,7 +4,7 @@ import os, platform, subprocess, hashlib, json, time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request, tempfile, shutil, hashlib
-
+from urllib.parse import urlparse
 try:
     from provenance.castore import ContentAddressableStore as CAStore
 except Exception:
@@ -62,6 +62,9 @@ def _install(tool: ToolSpec) -> ToolInstallResult:
         if not tool.sha256 or not tool.pkg.startswith(("http://","https://")):
             return ToolInstallResult(tool.name, False, "url", tool.version, None, "", "url_or_sha_missing")
         # allowed domains? (פשוט: אל תאפשר חוץ מ-https)
+        u = urlparse(tool.pkg)
+        if u.scheme != "https" or (u.hostname or "").lower() not in ALLOWED_URL_DOMAINS:
+            return ToolInstallResult(tool.name, False, "url", tool.version, None, "", f"domain_not_allowed:{u.hostname}")
 
         tmpf = tempfile.mktemp(prefix="imu_tool_")
         try:
