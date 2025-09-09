@@ -13,11 +13,12 @@ runs/
 build/
 .imu_state/
 .imu/
-._imu_cas/
+_imu_cas/
 runs/
 logs/
 assurance_store_text/
 .hmac_key
 assurance_store_text/*.key
-.node_modules/
+node_modules/
 node_modules
+snapshots
