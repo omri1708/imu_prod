@@ -25,6 +25,9 @@ from grounded.fact_gate import RefusedNotGrounded
 from engine.runtime.approvals import required_approvals
 from engine.blueprints.registry import resolve as resolve_blueprint
 from pathlib import Path
+from engine.runtime.approvals import required_approvals
+from engine.runtime.consent_store import ConsentStore
+CONS = ConsentStore(".imu/consents.json")
 
 # =====================================================
 #  Chat API Router — Conversation + Grounding + Build
@@ -123,6 +126,10 @@ def _planning_assist(uid: str, spec: Dict[str, Any], ctx: Dict[str, Any]) -> Dic
         user_id=uid, task="planning", intent="build_architecture",
         schema_hint=schema, prompt=prompt, temperature=0.1
     )
+    if not res.get("ok"):
+        from engine.self_heal.auto_pr import run as auto_pr_run
+        pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
+        res["auto_pr"] = pr
     return res.get("json") or {}
 
 # -------------------------- Public Endpoints --------------------------
@@ -226,15 +233,36 @@ async def send(body: Dict[str, Any]):
             "spec": spec_refined,
             "analysis": analysis,
         })
-    # 4.5) Approvals: מה צריך לפני שמתקדמים?
-    req = required_approvals({"tools": spec_refined.get("tools"), "title": spec_refined.get("title"), "summary": spec_refined.get("summary")})
-    if req["tools"] or req["secrets"] or req["licenses"] or req["notes"]:
-    # נבצע מה שאפשר בלי אישורים, ונחזיר למשתמש רשימת דרישות
 
-        pass
+    # --- Approvals & Secrets gate (לפני build) ---
+    req = required_approvals({"tools": spec_refined.get("tools"), "title": spec_refined.get("title"), "summary": spec_refined.get("summary")})
+    missing_tools   = [t for t in (req.get("tools") or [])   if not CONS.has_tool(uid, t)]
+    missing_secrets = [s for s in (req.get("secrets") or []) if not CONS.has_secret(uid, s)]
+
+    if missing_tools or missing_secrets:
+        # החזר תשובה “ללא כשל” שמבקשת את האישור/הזדהות — הלקוח ישלח /chat/consent
+        return {
+            "ok": False,
+            "needs_approvals": {
+                "tools": missing_tools,
+                "secrets": missing_secrets,
+                "notes": req.get("notes") or [],
+            },
+            "hint": "קרא ל־POST /chat/consent כדי לאשר התקנות/להזין סודות ולהמשיך."
+        }
+
+    # אפשר להפעיל Auto-install לפי דגל זיכרון (לא חובה)
+    if CONS.get_flag(uid, "auto_install"):
+        import os
+        os.environ["IMU_AUTO_INSTALL"] = "1"
+
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
-    
+    if not res.get("ok"):
+        from engine.self_heal.auto_pr import run as auto_pr_run
+        pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
+        res["auto_pr"] = pr
+        
     # --- Optional post-build actions for non-technical flow ---
     persist_dir = body.get("persist")
     emit_ci     = bool(body.get("emit_ci"))
@@ -307,3 +335,16 @@ async def send(body: Dict[str, Any]):
         **res  # build, tools, missing, instructions, blueprint, domain...
     }
     return _say(uid, st, txt, extra=extra)
+
+@router.post("/consent")
+def consent(body: Dict[str,Any]):
+    uid  = (body.get("user_id") or "user").strip()
+    tools = body.get("tools") or []
+    secrets = body.get("secrets") or {}   # {"OPENAI_API_KEY":"..."} למשל
+    auto_install = bool(body.get("auto_install"))
+    if tools:
+        CONS.grant_tools(uid, [str(t) for t in tools])
+    for k,v in secrets.items():
+        CONS.put_secret(uid, str(k), str(v))
+    CONS.set_flag(uid, "auto_install", auto_install)
+    return {"ok": True, "msg": "consents recorded"}

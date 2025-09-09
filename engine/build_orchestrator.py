@@ -9,7 +9,8 @@ import os
 import tempfile
 from asyncio.subprocess import PIPE, STDOUT
 from pathlib import Path
-
+from engine.artifacts.registry import register as register_artifacts
+from engine.self_heal.auto_pr import run as auto_pr_run
 
 """
 BuildOrchestrator (hybrid)
@@ -168,6 +169,21 @@ class BuildOrchestrator:
                 result["files_written"] = written
             except Exception as e:
                 result["persist_error"] = f"{e}"
+        try:
+            build_dg = register_artifacts(f"build-{name}", inputs)   # inputs = mapping {path:bytes|str}
+            result["build_artifact_digest"] = build_dg
+        except Exception:
+            pass
+
+        if not result.get("ok"):
+            title = f"Fix build failure: {result.get('name','module')}"
+            body  = "Build failed.\n\n```\n" + (result.get("log","")[:4000]) + "\n```"
+            try:
+                pr = auto_pr_run(repo_dir=".", title=title, body=body)
+                result["auto_pr"] = pr
+            except Exception as e:
+                result["auto_pr_error"] = str(e)
+        
         return result
 
     # ---------------------------- sandbox runner ----------------------------
@@ -254,6 +270,7 @@ class BuildOrchestrator:
                 rc3, out3s = 0, "pytest not installed; skipped"
         
         ok = (lint_rc == 0 and rc1 == 0 and rc2 == 0 and rc3 == 0)
+
         return {
             "ok": ok,
             "lint_rc": lint_rc, "lint_out": lint_out,

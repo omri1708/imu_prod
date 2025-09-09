@@ -5,6 +5,7 @@ import os
 import time
 import json
 from typing import Dict, Any, List, Optional, Callable, Tuple
+from engine.artifacts.registry import register as register_artifacts
 """
 Universal Orchestrator — configurable for:
   1) Quick dev / POC (no environment dependencies)
@@ -168,6 +169,7 @@ def test_root():
     assert app is not None
 """
     return {"app.py": app_py, "test_app.py": test_py}
+
 
 def _synthesize_poc_files(spec: Dict[str, Any]) -> Dict[str, str]:
     """
@@ -375,6 +377,10 @@ class UniversalOrchestrator:
         if callable(generator):
             try:
                 files = generator(spec) or {}
+                try:
+                    dg = register_artifacts(spec.get("title","app"), files)  # רישום ארטיפקטים גולמיים
+                except Exception:
+                    dg = None
             except Exception:
                 files = {}
 
@@ -403,6 +409,7 @@ class UniversalOrchestrator:
         # 6) response with actionable guidance
         return {
             "ok": ok,
+            "artifact_digest": dg,
             "mode": mode,
             "domain": domain,
             "blueprint": bp,
