@@ -307,6 +307,8 @@ class LLMGateway:
             else:
                 return {"content": self._local_answer(msgs, sources)}
         cached = call_llm_with_cache(_llm_fn, prompt, ctx={"user_id": user_id}, cache=self._cache)
+        text = cached["content"] or ""
+        # מדדים ל-Bandit
         lat = (time.time() - start) * 1000.0
         meta_out = cached.get("meta") or {}
         quality = float(meta_out.get("quality", 0.8))
@@ -314,13 +316,15 @@ class LLMGateway:
         reward  = arm["w_quality"]*quality + arm["w_latency"]*max(0.0, 2000.0-lat)/2000.0 + arm["w_cost"]*max(0.0, 0.01-cost)/0.01
         self._ucb.update(i, reward)
 
-        # מודלים/טמפ’ ושקלולים — עדכן לפי הצורך
-        self._arms = [
-            {"name": self.oa_chat_model, "temp": 0.2, "w_cost": 0.4, "w_latency": 0.3, "w_quality": 0.3},
-            {"name": self.claude_model,  "temp": 0.7, "w_cost": 0.2, "w_latency": 0.2, "w_quality": 0.6},
-        ]
-        self._ucb = UCBSelector(self._arms)
-        text = cached["content"]
+        # Cite-or-Silence — החזרה תואמת לציפיית ה-chat_api שלך (payload)
+        resp = require_citations_or_block(
+            text,
+            meta={"sources": sources, "citations": citations, **meta_out},
+            policy={}
+        )
+        if not resp.get("ok"):
+            return resp
+        return {"ok": True, "payload": {"text": resp["text"], "citations": citations, "model": model_name}}
 
     def structured(
         self,

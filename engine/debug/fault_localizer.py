@@ -12,11 +12,13 @@ def bisect_steps(steps: List[Callable[[], Dict[str,Any]]]) -> Tuple[int, Dict[st
     while lo <= hi:
         mid = (lo + hi)//2
         # הרץ 0..mid
-        ok = True; out = {}
+        ok = True
+        out = {}
         for i in range(0, mid+1):
             out = steps[i]()
             if not bool(out.get("ok", True)):
-                ok = False; break
+                ok = False
+                break
         if ok:
             last_ok = out
             lo = mid + 1
