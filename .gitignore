@@ -1,15 +1,32 @@
+# סביבות פיתוח / וירטואליות
 .venv/
+venv/
+.venv/
+.venv*/
+venv/
+venvֿ /
+# מטמונים וכלי בדיקות
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# קבצי מערכת / IDE
 .DS_Store
 .vscode/
 .env
+
+# פלטי ריצה/בנייה
 runs/
 dist/
 build/
-.imu_state/
-runs/
 logs/
-assurance_store_text/
+
+# מצב פנימי של IMU
+.imu_state/
+.imu/
+_imu_cas/
+
+# קבצי אבטחה/חומר רגיש
 .hmac_key
+assurance_store_text/
 assurance_store_text/*.key
