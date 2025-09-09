@@ -315,7 +315,6 @@ class LLMGateway:
         return {"ok": True, "payload": payload}
 
 
-
     def structured(
         self,
         user_id: str,

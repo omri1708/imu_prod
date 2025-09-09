@@ -13,3 +13,4 @@ logs/
 assurance_store_text/
 .hmac_key
 assurance_store_text/*.key
+node_modules/
