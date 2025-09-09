@@ -11,7 +11,8 @@ from engine.pipeline_respond_hook import pipeline_respond
 # ---- קבלני-משנה (שכבות קיימות) שנעטוף:
 from engine.pipeline import Engine as VMEngine              # (6)
 from engine.synthesis_pipeline import SynthesisPipeline as _SynthV1  # (7) אם יש Class
-
+from engine.prebuild.adapter_builder import ensure_capabilities
+from engine.prebuild.tool_acquisition import ensure_tools
 
 @dataclass
 class Runner:
@@ -31,7 +32,10 @@ class Orchestrator:
         if not pick:
             emit_timeline("orchestrator.error", "no_runner_match")
             raise ValueError("no_runner_for_spec")
-
+        missing = ensure_capabilities(spec, ctx) # בונה/מסנתז אדפטורים חסרים (או מחזיר [])
+        installed = ensure_tools(spec, ctx) # מתקין כלים נדרשים עם evidence
+        ctx.setdefault("__prebuild__", {}).update({"missing": missing, "installed": installed})
+        
         # עטיפת Strict-Grounded per-user
         guarded = await build_user_guarded(lambda s: self._run_instrumented(pick, s, ctx), user_id=user_id)
         out = await guarded(spec)
@@ -48,7 +52,8 @@ class Orchestrator:
         return out
 
     async def _run_instrumented(self, runner: Runner, spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
-        emit_progress(0.0); emit_timeline("runner.start", runner.name)
+        emit_progress(0.0)
+        emit_timeline("runner.start", runner.name)
         try:
             res = runner.run(spec, ctx)
             if inspect.isawaitable(res):
@@ -63,11 +68,14 @@ def _is_vm_program(x: Any) -> bool:
     return isinstance(x, list) and all(isinstance(op, dict) and "op" in op for op in x)
 
 def _is_json_spec_string(x: Any) -> bool:
-    if not isinstance(x, str): return False
+    if not isinstance(x, str):
+        return False
     s = x.lstrip()
-    if not (s.startswith("{") or s.startswith("[")): return False
+    if not (s.startswith("{") or s.startswith("[")):
+        return False
     try:
-        json.loads(s); return True
+        json.loads(s)
+        return True
     except Exception:
         return False
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio, os, contextlib
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse, FileResponse, PlainTextResponse
+from contextlib import asynccontextmanager
 
 # ה־API-ים שצריך (כבר קיימים אצלך)
 from server.routers.consent_api import router as consent_router
@@ -10,18 +11,31 @@ from server.routers.adapters_secure import router as adapters_secure_router
 from server.routers.respond_api import router as respond_router
 from server.routers.program_api import router as program_router
 from server.routers.orchestrate_api import router as orchestrate_router
-from server.routers.chat_api import router as chat_api_router  # שרת השיחה
 from learning.supervisor import LearningSupervisor
 from engine.pipeline_events import AUDIT as _ensure_pipeline_events  # noqa: F401
-APP = FastAPI(title="IMU Core (Chat)")
+from server.routers.chat_api import router as chat_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.makedirs("./logs", exist_ok=True)
+    app.state.learn_task = asyncio.create_task(sup.run_forever())
+    try:
+        yield
+    finally:
+        t = getattr(app.state, "learn_task", None)
+        if t:
+            t.cancel()
+            with contextlib.suppress(Exception):
+                await t
 
 
-# מחברים יכולות
+APP = FastAPI(title="IMU Core (Chat)", lifespan=lifespan)
+
+APP.include_router(chat_router)
 APP.include_router(consent_router)
 APP.include_router(adapters_secure_router)
 APP.include_router(respond_router)
 APP.include_router(program_router)
-APP.include_router(chat_api_router)  # /chat/send (API)
 APP.include_router(orchestrate_router)
 
 # דף הבית = /chat/
@@ -53,15 +67,7 @@ sup = LearningSupervisor(
     rr_log_path="./logs/resource_required.jsonl"
 )
 
-@APP.on_event("startup")
-async def _startup():
-    os.makedirs("./logs", exist_ok=True)
-    APP.state.learn_task = asyncio.create_task(sup.run_forever())
 
-@APP.on_event("shutdown")
-async def _shutdown():
-    t = getattr(APP.state, "learn_task", None)
-    if t:
-        t.cancel()
-        with contextlib.suppress(Exception):
-            await t
+
+
+

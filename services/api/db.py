@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-"""
-Legal / Use Anchor:
-- Lawful, user-controlled DB connectivity. No hidden actions.
+import os
+import subprocess
+from typing import Tuple
+from sqlmodel import create_engine, Session
 
+"""
 DB bootstrap:
 - Reads DB_URL from environment (e.g., sqlite:///data/app.db or postgres)
 - Provides SQLModel engine + session dependency
 - Health/ready helpers and optional Alembic migration
 """
 
-import os
-import subprocess
-from typing import Tuple
-from sqlmodel import create_engine, Session
+
 
 def _db_url() -> str:
     return os.getenv("DB_URL", "sqlite:///data/app.db")

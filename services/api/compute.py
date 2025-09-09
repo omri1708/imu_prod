@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from typing import Dict, Any, List
 """
-Legal / Use Anchor:
-- Lawful behavior evaluation; pure math logic.
-
 Weighted score computation helper.
 """
 
-from typing import Dict, Any, List
+
 
 class WeightedScore:
     def __init__(self, name: str, inputs: List[str], weights: List[float]):
