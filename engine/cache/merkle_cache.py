@@ -1,5 +1,4 @@
-# PATH: engine/cache/merkle_cache.py
-# -*- coding: utf-8 -*-
+# engine/cache/merkle_cache.py
 from __future__ import annotations
 import os, json, hashlib
 from pathlib import Path

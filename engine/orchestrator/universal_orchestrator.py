@@ -377,12 +377,12 @@ class UniversalOrchestrator:
         if callable(generator):
             try:
                 files = generator(spec) or {}
-                try:
-                    dg = register_artifacts(spec.get("title","app"), files)  # רישום ארטיפקטים גולמיים
-                except Exception:
-                    dg = None
             except Exception:
                 files = {}
+        try:
+            dg = register_artifacts(spec.get("title","app"), files)  # רישום ארטיפקטים גולמיים
+        except Exception:
+            dg = None
 
         if not files or not _has_python_sources(files):
             files = _builtin_python_web(spec)

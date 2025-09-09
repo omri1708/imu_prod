@@ -53,7 +53,8 @@ class SubjectEngine:
         prof={}
         for key in ("ui.theme","ui.lang","routing.bias"):
             p = self.um.pref_get(uid, key)
-            if p: prof[key]= {"value": p.value, "confidence": p.confidence, "ts": p.ts}
+            if p:
+                prof[key]= {"value": p.value, "confidence": p.confidence, "ts": p.ts}
         return prof
 
     def persona(self, uid: str) -> Dict[str, Any]:
