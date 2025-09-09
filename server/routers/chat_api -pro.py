@@ -19,7 +19,7 @@ from engine.orchestrator.universal_orchestrator import (
     OrchestratorConfig,   # מאפשר בחירה בין poc/live/prod
 )
 
-from user_model.model import UserStore
+from user_model.model import UserStore, UserModel
 from user_model.subject import SubjectEngine
 from grounded.fact_gate import RefusedNotGrounded
 from engine.runtime.approvals import required_approvals
@@ -33,6 +33,8 @@ CONS = ConsentStore(".imu/consents.json")
 # =====================================================
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+US = UserStore("./assurance_store_users")
+UM = UserModel(US)
 
 # --- Global runtime singletons (שימוש־חוזר) ---
 SESS: Dict[str, SessionState] = {}
@@ -288,12 +290,35 @@ async def send(body: Dict[str, Any]):
 
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
+    
+    import os
+    from engine.self_heal.controller import self_heal_once, classify_failure
+
+    max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
+    attempt = 0
+    build = res.get("build", {})
+    files = build.get("inputs", {}) or {}
+
+    while not res.get("ok") and attempt < max_attempts and isinstance(files, dict) and files:
+        attempt += 1
+        cls = classify_failure(build)
+        fixed, note = self_heal_once(spec_refined, files, build, cls)
+        if not fixed:
+            break
+        new_build = await BUILDER.build_python_module(fixed, name="app_generated")
+        res = {**res, "build": new_build, "ok": bool(new_build.get("ok"))}
+        if res["ok"]:
+            break
+        build = new_build
+        files = fixed
+    
     if not res.get("ok"):
         from engine.self_heal.auto_pr import run as auto_pr_run
         pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
         res["auto_pr"] = pr
         friendly = _humanize_build_failure(res.get("build", {}))
         return _say(uid, st, friendly, extra={"spec": spec_refined, **res})
+    
     # --- Optional post-build actions for non-technical flow ---
     persist_dir = body.get("persist")
     emit_ci     = bool(body.get("emit_ci"))
@@ -357,15 +382,18 @@ async def send(body: Dict[str, Any]):
     else:
         txt = "הבנייה נכשלה — בדוק לוגים"
 
+    from engine.deploy.rollback import suggest_rollback
+    rb = suggest_rollback(spec_refined.get("title","app"))
     extra = {
         "mode": mode,
         "spec": spec_refined,
         "analysis": analysis,
         "files_written": written,
         "deploy_script": deploy_script,
-        **res  # build, tools, missing, instructions, blueprint, domain...
+        **res,  # build, tools, missing, instructions, blueprint, domain...
+        "rollback": rb
     }
-    return _say(uid, st, txt, extra=extra)
+    return _say(uid, st, txt + " (הפעלתי סיוע מתקדם.)", extra = extra)
 
 @router.post("/consent")
 def consent(body: Dict[str,Any]):
@@ -379,3 +407,11 @@ def consent(body: Dict[str,Any]):
         CONS.put_secret(uid, str(k), str(v))
     CONS.set_flag(uid, "auto_install", auto_install)
     return {"ok": True, "msg": "consents recorded"}
+
+@router.post("/preferences")
+def set_preferences(body: Dict[str,Any]):
+    uid = (body.get("user_id") or "user").strip()
+    tone = (body.get("tone") or {})
+    for k,v in tone.items():
+        UM.pref_set(uid, f"tone.{k}", v, confidence=0.9)
+    return {"ok": True}

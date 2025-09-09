@@ -156,7 +156,7 @@ class BuildOrchestrator:
             "manifest": manifest,
             "files_built": sorted(py_targets),
         })
-        
+        # allow API to persist the generated sources:
         result["inputs"] = inputs
         
         # Optional persist of generated sources to disk (for non-technical users)

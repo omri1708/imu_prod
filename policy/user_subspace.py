@@ -1,7 +1,7 @@
 # policy/user_subspace.py
 from __future__ import annotations
 from typing import Dict
-from .policy_engine import UserSubspacePolicy, PolicyRule
+from .user_policy import UserSubspacePolicy, PolicyRule
 
 class UserPolicyRegistry:
     def __init__(self):

@@ -1,6 +1,8 @@
 # אופציונלי: גרסת בדיקה אם בכל זאת רוצים לשמור utility
 from ui.dsl import Page, Component
 from ui.schema_compose import apply_table_specs
+from typing import Dict, Any, List
+from engine.rollout_guard import run_negative_suite, RolloutBlocked, record_event, diagnose, propose_remedies, apply_remedies
 
 def finalize_with_auto_remediation_for_specs(
     table_specs: List[Dict[str,Any]],

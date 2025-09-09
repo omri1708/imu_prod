@@ -18,7 +18,7 @@ class Consolidation:
         self.ucon = ucon
 
     def _stable(self, key: str, min_age: float = 24*3600, min_hits: int = 2) -> bool:
-        rec = self.mem._load(self.mem.t1_file).get(key)
+        rec = self.mem._load_t1(self.mem.t1_path).get(key)
         if not rec: return False
         age = time.time() - rec.get("ts", 0)
         hits = rec.get("hits", 1)
@@ -26,21 +26,21 @@ class Consolidation:
 
     def observe(self, key: str):
         # העלאת counter לשימושים — ניצול בקונסולידציה
-        d = self.mem._load(self.mem.t1_file)
+        d = self.mem._load_t1(self.mem.t1_path)
         if key in d:
             rec = d[key]; rec["hits"] = int(rec.get("hits", 0)) + 1; rec["ts"] = time.time()
-            self.mem._save(self.mem.t1_file, d)
+            self.mem._save_t1(self.mem.t1_path, d)
 
     def consolidate(self):
-        t1 = self.mem._load(self.mem.t1_file)
-        t2 = self.mem._load(self.mem.t2_file)
+        t1 = self.mem._load_t1(self.mem.t1_path)
+        t2 = self.mem._load_t2(self.mem.t2_path)
         changed = False
         for k, rec in list(t1.items()):
             if self._stable(k):
                 t2[k] = rec; del t1[k]; changed = True
         if changed:
-            self.mem._save(self.mem.t1_file, t1)
-            self.mem._save(self.mem.t2_file, t2)
+            self.mem._save_t1(self.mem.t1_path, t1)
+            self.mem._save_t2(self.mem.t2_path, t2)
 
     def on_interaction(self, user_id: str, text: str, derived_preferences: Dict[str,Any] | None = None):
         """נקרא בסוף ריצה: עדכון זיכרון ותודעה."""

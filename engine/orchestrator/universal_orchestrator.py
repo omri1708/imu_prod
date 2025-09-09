@@ -6,6 +6,7 @@ import time
 import json
 from typing import Dict, Any, List, Optional, Callable, Tuple
 from engine.artifacts.registry import register as register_artifacts
+from engine.qa.spec_tests import gen_acceptance_tests
 """
 Universal Orchestrator — configurable for:
   1) Quick dev / POC (no environment dependencies)
@@ -379,6 +380,7 @@ class UniversalOrchestrator:
                 files = generator(spec) or {}
             except Exception:
                 files = {}
+        files.setdefault("services/api/tests/test_acceptance_generated.py", gen_acceptance_tests(spec))
         try:
             dg = register_artifacts(spec.get("title","app"), files)  # רישום ארטיפקטים גולמיים
         except Exception:

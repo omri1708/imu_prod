@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# user_model/model.py
 from __future__ import annotations
 import os, json, time, base64, hashlib, threading
 from dataclasses import dataclass, asdict

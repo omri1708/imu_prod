@@ -301,16 +301,9 @@ class LLMGateway:
                 return {"content": self._anthropic_chat(msgs, json_mode=False, temperature=temperature)}
             else:
                 return {"content": self._local_answer(msgs, sources)}
+        
         cached = call_llm_with_cache(_llm_fn, prompt, ctx={"user_id": user_id}, cache=self._cache)
         text = cached["content"]
-
-        # === Model call (real if keys exist; else local fallback) ===
-        if _HAS_OPENAI:
-            text = self._openai_chat(msgs, json_mode=False, temperature=temperature)
-        elif _HAS_ANTHROPIC:
-            text = self._anthropic_chat(msgs, json_mode=False, temperature=temperature)
-        else:
-            text = self._local_answer(msgs, sources)
 
         payload = {
             "text": text,

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# user_model/subject.py
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
 import re, time
