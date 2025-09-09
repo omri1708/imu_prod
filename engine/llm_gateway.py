@@ -10,6 +10,7 @@ from engine.prompt_builder import PromptBuilder
 from user_model.model import UserStore
 from engine.llm.cache_integrations import call_llm_with_cache
 from engine.llm.cache import default_cache
+from policy.cite_or_silence import require_citations_or_block
 
 """
 LLMGateway (hybrid, hardened)

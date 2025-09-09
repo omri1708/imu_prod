@@ -119,7 +119,14 @@ def synthesize_min_adapter(kind: str, *, workspace: str, policy: Dict[str,Any]) 
     with open(target_path, "w", encoding="utf-8") as f:
         f.write(tpl["content"])
     logs.append(f"adapter_stub_written:{target_path}")
+    
+    from engine.capabilities.pipeline import capability_adoption_flow
+    adopt = capability_adoption_flow(kind, proposal={"filename": target_path}, policy=policy)
+    if not adopt.get("ok"):
+        return AdapterBuildResult(ok=False, kind=kind, artifacts=[], claims=[], evidence=[{"source":"capability.adoption","payload":adopt}], logs=logs)
+    
     return target_path, logs
+
 
 
 def _lint(path: str) -> Tuple[bool,str]:
@@ -143,9 +150,12 @@ def _dryrun(path: str, workspace: str) -> Tuple[bool,str]:
 
 def build_missing_adapter(kind: str, *, workspace: str, policy: Dict[str,Any]) -> AdapterBuildResult:
     path, logs = synthesize_min_adapter(kind, workspace=workspace, policy=policy)
-    l_ok, l_out = _lint(path);  logs.append(l_out)
-    c_ok, c_out = _compile(path); logs.append(c_out)
-    d_ok, d_out = _dryrun(path, workspace); logs.append(d_out)
+    l_ok, l_out = _lint(path)
+    logs.append(l_out)
+    c_ok, c_out = _compile(path)
+    logs.append(c_out)
+    d_ok, d_out = _dryrun(path, workspace)
+    logs.append(d_out)
 
     # evidence + claims
     art_bytes = open(path, 'rb').read()
