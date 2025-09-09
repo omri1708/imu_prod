@@ -18,11 +18,6 @@ BuildOrchestrator (hybrid)
 - Fallback path: run in an ephemeral tmpdir with asyncio.subprocess
 - Always returns a rich result dict; never raises on normal build errors
 - Adds SpecLock digest + compact manifest (like the tmpdir version)
-
-Legal/Use Anchor:
-- No violation of provider or platform ToS; lawful, permitted use only.
-- User controls exposure of code & sources; sandbox uses no network (no_net).
-- Provided as part of a legitimate service workflow.
 """
 
 

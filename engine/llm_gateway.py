@@ -10,6 +10,7 @@ from engine.prompt_builder import PromptBuilder
 from user_model.model import UserStore
 from engine.llm.cache_integrations import call_llm_with_cache
 from engine.llm.cache import default_cache
+from engine.cache.merkle_cache import get as cache_get, put as cache_put
 
 """
 LLMGateway (hybrid, hardened)
@@ -18,12 +19,7 @@ LLMGateway (hybrid, hardened)
 - If require_grounding=True → we *explicitly* call FactGate.require_sources(sources)
   and fail fast when sources are missing/invalid.
 
-Anchors (per user's request):
-- No violation of provider ToS; lawful, permitted use.
-- Provided as part of a legitimate paid service; user controls usage & data.
-- Any limitation should be explicit and documented.
 
-This file is self-contained and ready for VS Code.
 """
 
 # Optional SubjectEngine (for richer persona)
@@ -240,6 +236,7 @@ class LLMGateway:
         *,
         require_grounding: bool = False,
         temperature: float = 0.0,
+         **kw,
     ) -> Dict[str, Any]:
         """Chat answer with optional strict grounding and recorded citations.
 
@@ -247,6 +244,18 @@ class LLMGateway:
           *before* calling a model. If the gate fails → return ok=False.
         - Citations (urls) are always recorded to provenance if available.
         """
+        # --- CACHE: לפני יציאה לרשת ---
+        cache_key_input = {
+            "fn": "chat",
+            "task": task,
+            "intent": intent,
+            "content": content,                 # כולל prompt/sources/context
+            "flags": {"require_grounding": require_grounding, "temperature": temperature}
+        }
+        cached = cache_get("llm_chat", cache_key_input)
+        if cached:
+            cached["_source"] = "cache"
+            return cached
         persona = self._persona(user_id)
         msgs = self.pb.compose(user_id=user_id, task=task, intent=intent, persona=persona, content=content, json_only=False)
 
