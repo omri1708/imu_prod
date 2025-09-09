@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, platform, subprocess, hashlib, json, time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.request, tempfile, shutil, hashlib
 
 try:
     from provenance.castore import ContentAddressableStore as CAStore
@@ -55,6 +56,28 @@ def _is_windows() -> bool: return platform.system().lower() == "windows"
 
 
 def _install(tool: ToolSpec) -> ToolInstallResult:
+    # direct URL with sha256 pin (optional)
+    if tool.manager == "url":
+        if not tool.sha256 or not tool.pkg.startswith(("http://","https://")):
+            return ToolInstallResult(tool.name, False, "url", tool.version, None, "", "url_or_sha_missing")
+        # allowed domains? (פשוט: אל תאפשר חוץ מ-https)
+
+        tmpf = tempfile.mktemp(prefix="imu_tool_")
+        try:
+            with urllib.request.urlopen(tool.pkg, timeout=30) as r, open(tmpf,"wb") as f:
+                f.write(r.read())
+            h = hashlib.sha256(open(tmpf,"rb").read()).hexdigest()
+            if h.lower() != tool.sha256.lower():
+                return ToolInstallResult(tool.name, False, "url", tool.version, None, "", "sha256_mismatch")
+            # “התקנה” מינימלית: שים ב-var/cas/bin/name
+            os.makedirs("var/cas/bin", exist_ok=True)
+            dst = os.path.join("var/cas/bin", tool.name)
+            shutil.copyfile(tmpf, dst)
+            os.chmod(dst, 0o755)
+            evid = CAS.put(json.dumps({"tool": tool.__dict__, "sha256": h, "ts": time.time()}, ensure_ascii=False).encode("utf-8"))
+            return ToolInstallResult(tool.name, True, "url", tool.version, evid, dst, "")
+        except Exception as e:
+            return ToolInstallResult(tool.name, False, "url", tool.version, None, "", f"download_error:{e}")
     cmd: List[str] = []
     if tool.manager == "brew" and _is_macos():
         pkg = f"{tool.pkg}{'@'+tool.version if tool.version else ''}"

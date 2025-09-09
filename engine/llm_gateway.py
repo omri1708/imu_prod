@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 
 from engine.prompt_builder import PromptBuilder
 from user_model.model import UserStore
+from engine.llm.cache_integrations import call_llm_with_cache
+from engine.llm.cache import default_cache
 
 """
 LLMGateway (hybrid, hardened)
@@ -105,6 +107,7 @@ class LLMGateway:
         stats_path: str = "assurance_store/llm_stats.json",
         user_store_path: str = "./assurance_store_users",
         prov_root: Optional[str] = None,
+        
     ) -> None:
         # Prompt templates & stats
         try:
@@ -135,7 +138,7 @@ class LLMGateway:
         self.oa_chat_model = _env("IMU_OPENAI_CHAT_MODEL", "gpt-4o-mini")
         self.oa_json_model = _env("IMU_OPENAI_JSON_MODEL", "gpt-4o-mini")
         self.claude_model = _env("IMU_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-
+        self._cache = default_cache()
     # -------------------------------- Persona -----------------------------------------------
     def _persona(self, user_id: str) -> Dict[str, Any]:
         """Return persona dict using both SubjectEngine and UserStore (robust).
@@ -274,6 +277,23 @@ class LLMGateway:
                 return {"ok": False, "error": "not_grounded", "details": str(e)}
             except Exception as e:  # unexpected gate failure
                 return {"ok": False, "error": "gate_error", "details": str(e)}
+        
+        meta = {
+            "model": self.oa_chat_model if _HAS_OPENAI else (self.claude_model if _HAS_ANTHROPIC else "local"),
+            "system_v": "1", "template_v": "1",
+            "tools": [], "ctx_ids": [], "persona_v": "1", "policy_v": "1",
+            "ttl_s": 3600, "allow_near_hit": True
+        }
+        prompt = {"user_text": msgs[-1]["content"], "meta": meta}
+        def _llm_fn(p):  # עוטף את הקריאה האמיתית
+            if _HAS_OPENAI:
+                return {"content": self._openai_chat(msgs, json_mode=False, temperature=temperature)}
+            elif _HAS_ANTHROPIC:
+                return {"content": self._anthropic_chat(msgs, json_mode=False, temperature=temperature)}
+            else:
+                return {"content": self._local_answer(msgs, sources)}
+        cached = call_llm_with_cache(_llm_fn, prompt, ctx={"user_id": user_id}, cache=self._cache)
+        text = cached["content"]
 
         # === Model call (real if keys exist; else local fallback) ===
         if _HAS_OPENAI:

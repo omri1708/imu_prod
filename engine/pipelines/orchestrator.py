@@ -27,15 +27,14 @@ class Orchestrator:
     async def run_any(self, spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
         user_id = ctx.get("user_id") or "anon"
         emit_timeline("orchestrator.start", f"user={user_id}")
+        pre_missing = ensure_capabilities(spec, ctx)   # בונה stubs ליכולות חסרות (dry-run)
+        pre_tools   = ensure_tools(spec, ctx)          # מתקין כלים עם evidence ורשיונות
+        ctx.setdefault("__prebuild__", {}).update({"missing": pre_missing, "installed": pre_tools})
         # בוחרים Runner
         pick: Optional[Runner] = next((r for r in self.runners if r.accepts(spec)), None)
         if not pick:
             emit_timeline("orchestrator.error", "no_runner_match")
             raise ValueError("no_runner_for_spec")
-        missing = ensure_capabilities(spec, ctx) # בונה/מסנתז אדפטורים חסרים (או מחזיר [])
-        installed = ensure_tools(spec, ctx) # מתקין כלים נדרשים עם evidence
-        ctx.setdefault("__prebuild__", {}).update({"missing": missing, "installed": installed})
-        
         # עטיפת Strict-Grounded per-user
         guarded = await build_user_guarded(lambda s: self._run_instrumented(pick, s, ctx), user_id=user_id)
         out = await guarded(spec)

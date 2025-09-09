@@ -9,24 +9,26 @@ from engine.adapter_registry import get_adapter
 from synth.specs_adapter import parse_adapter_jobs
 from engine.contracts_gate import enforce_respond_contract
 import time, random
-
+from audit.merkle_log import MerkleAudit
 
 
 AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")
 
+AUDIT_MERKLE = MerkleAudit("var/audit/pipeline")
 
 def emit_progress(pct: float):
     broker.publish("progress", {"ts": time.time(), "value": float(pct)}, priority="logic")
-
+    AUDIT_MERKLE.append("progress", {"value": float(pct)})
 
 def emit_timeline(kind: str, msg: str):
     broker.publish("timeline", {"ts": time.time(), "kind": kind, "msg": msg}, priority="telemetry")
-
+    AUDIT_MERKLE.append("timeline", {"kind": kind, "msg": msg})
 
 def _emit(topic: str, event: dict, *, priority: int = 1):
     ok = broker.publish(topic, event, priority=priority)
     AUDIT.append({"topic":topic, "delivered":ok, "event":event})
-
+    AUDIT_MERKLE.append(topic, {**event, "delivered": ok})   
+    
 def run_pipeline_spec(*, user: str, spec_text: str, policy, ev_index) -> str:
     """
     מריץ pipeline לפי spec JSON:
