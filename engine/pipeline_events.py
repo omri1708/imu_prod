@@ -10,10 +10,10 @@ from synth.specs_adapter import parse_adapter_jobs
 from engine.contracts_gate import enforce_respond_contract
 import time, random
 from audit.merkle_log import MerkleAudit
+from engine.opt.optimizer import AutoOpt, kpi_to_reward
 
-
+OPT = AutoOpt()
 AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")
-
 AUDIT_MERKLE = MerkleAudit("var/audit/pipeline")
 
 def emit_progress(pct: float):
@@ -72,6 +72,7 @@ def run_pipeline_spec(*, user: str, spec_text: str, policy, ev_index) -> str:
         _emit("timeline", {"t":"no_adapters","msg":"no adapter jobs in spec", **meta})
     artifacts: List[Dict[str,str]] = []
     total = len(jobs) or 1
+    arms = [{"name": j["kind"], "x":[1,0,0,0]} for j in jobs]  # context אם יש; אחרת יחידות
     for i, job in enumerate(jobs, 1):
         kind = job["kind"]
         _emit("progress", {"stage":"adapter_start","kind":kind,"i":i,"n":total, **meta})

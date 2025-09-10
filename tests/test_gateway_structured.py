@@ -35,3 +35,5 @@ def test_chat_cite_or_silence_block(monkeypatch):
 
     out = gw.chat(user_id="u", task="t", intent="i", content={"prompt":"p"}, require_grounding=False, temperature=0.0)
     assert out["ok"] is False and out["error"] == "no_citations"
+
+

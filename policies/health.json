@@ -1,0 +1,7 @@
+{
+  "min_trust": 0.97,
+  "min_sources": 4,
+  "freshness_months": 6,
+  "targets": {"p95_ms": 1200, "error_rate": 0.005, "cost_usd": 0.015},
+  "capabilities": {"manual_approve": true, "allow_live": false}
+}

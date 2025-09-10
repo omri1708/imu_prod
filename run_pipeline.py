@@ -2,8 +2,9 @@
 from __future__ import annotations
 import json, sys, os
 from synth.specs import BuildSpec, Contract
-from engine.synthesis_pipeline import run_pipeline
+from pipeline.synthesis import SynthesisPipeline
 
+SP = SynthesisPipeline
 def default_spec() -> BuildSpec:
     return BuildSpec(
         name="hello_service",
@@ -20,7 +21,7 @@ def default_spec() -> BuildSpec:
 
 def main():
     spec = default_spec()
-    summary = run_pipeline(spec)
+    summary = SP.run(spec)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 if __name__=="__main__":

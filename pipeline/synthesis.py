@@ -5,7 +5,7 @@ from typing import Dict, Any, List
 
 from core.contracts.verifier import Contracts
 from grounded.fact_gate import FactGate, EvidenceIndex, SchemaRule, UnitRule, FreshnessRule
-from grounded.provenance_store import ProvenanceStore
+from provenance.store import ProvenanceStore
 from grounded.audit import AuditLog
 
 class SynthesisError(Exception): ...

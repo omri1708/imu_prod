@@ -22,8 +22,7 @@ from engine.orchestrator.universal_orchestrator import (
 from user_model.model import UserStore
 from user_model.subject import SubjectEngine
 from grounded.fact_gate import RefusedNotGrounded
-from policy.cite_or_silence import require_citations_or_block
-
+from engine.proof.proof_util import make_proof
 # =====================================================
 #  Chat API Router — Conversation + Grounding + Build
 # =====================================================
@@ -163,11 +162,14 @@ async def send(body: Dict[str, Any]):
     # ריכוז קונטקסט מרלוונטי (T0/T1/T2) + פרסונה
     ctx = MB.pack_context(uid, msg)
     ctx.update(_persona_for_context(uid))
+    # מדיניות capabilities עבור PREBUILD/Adapters
+
 
     # בחירת מצב Orchestrator לפי הבקשה (או ברירת מחדל 'live')
-    mode = (body.get("mode") or "").strip().lower() or "live"
+    mode = (body.get("mode") or "").strip().lower() or "live" # "dryrun" | "live" | ""
     auto_install = body.get("auto_install", None)  # None ⇒ לפי ברירות מחדל של המוד
     ORC = _orc_for_mode(mode, auto_install=auto_install)
+    ctx.setdefault("__policy__", {}).setdefault("capabilities", {})["allow_live"] = (mode == "live")
 
     # ======================================
     # A) Strict grounded answer (no hallucinations)
@@ -188,8 +190,10 @@ async def send(body: Dict[str, Any]):
             raise HTTPException(400, f"grounded-answer-refused: {detail}")
         payload = out["payload"]
         return _say(uid, st, payload["text"], extra={
-            "citations": payload.get("citations"),
-            "root": payload.get("root"),
+            "proof": make_proof(
+            citations=payload.get("citations"),
+            model=payload.get("model")
+            ),
             "grounded": True
         })
 
@@ -229,8 +233,26 @@ async def send(body: Dict[str, Any]):
             "analysis": analysis,
         })
 
+        # אם המשתמש לא בחר מצב הרצה - שואלים (מתאים למשתמש לא-טכני)
+    if not mode:
+        st.stage = "choose_mode"
+        return _say(uid, st, "איך להריץ?", extra={
+            "next": {
+                "type": "choose_run_mode",
+                "options": [
+                    {"id":"dryrun", "label":"הרצה יבשה (בטוחה)", "explain":"מדמה את הפעולות ללא ביצוע בפועל. מתאים לבדיקה מהירה וללא סיכונים."},
+                    {"id":"live",   "label":"הרצה חיה (מבוקרת)", "explain":"מבצע בפועל פעולות מערכת (למשל kubectl/gradle) תחת מדיניות בטיחותית, לוגים ו-rollback."}
+                ]
+            },
+            "hint": "אפשר לבחור תמיד יבשה קודם ואז חיה."
+        })
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
-    res = await ORC.execute(spec_refined)
+    
+    try:
+        res = await ORC.execute(spec_refined, ctx=ctx)   # אם החתימה קיימת
+    except TypeError:
+        spec_refined.setdefault("__policy__", ctx["__policy__"])
+        res = await ORC.execute(spec_refined)
 
     # 6) ניסוח מענה ידידותי למשתמש + החזרת מידע עשיר
     if res.get("ok"):

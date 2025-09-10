@@ -8,7 +8,7 @@ import time as _t
 from grounded.fact_gate import FactGate, EvidenceIndex, SchemaRule, UnitRule, FreshnessRule, FactGatePolicy
 from grounded.validators import TrustRule, ApiRule, ConsistencyRule, ValidationError as GroundValidationError
 
-from grounded.provenance_store import ProvenanceStore
+from provenance.store import ProvenanceStore
 from grounded.audit import AuditLog
 from core.contracts.verifier import Contracts, ContractViolation
 from core.vm.vm import VMError

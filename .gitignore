@@ -22,3 +22,4 @@ assurance_store_text/
 assurance_store_text/*.key
 .node_modules
 node_modules
+snapshots/

@@ -13,6 +13,16 @@ from engine.pipeline import Engine as VMEngine              # (6)
 from engine.synthesis_pipeline import SynthesisPipeline as _SynthV1  # (7) אם יש Class
 from engine.prebuild.adapter_builder import ensure_capabilities
 from engine.prebuild.tool_acquisition import ensure_tools
+from engine.opt.optimizer import AutoOpt, kpi_to_reward
+
+OPT_RUN = AutoOpt()
+arms = [
+  {"name":"vm", "x":[1,0,0,0]},
+  {"name":"events", "x":[0,1,0,0]},
+  {"name":"buildspec", "x":[0,0,1,0]}
+]
+# בחר runner לפי arm["name"]
+i, arm = OPT_RUN.select(arms)
 
 @dataclass
 class Runner:
@@ -25,6 +35,16 @@ class Orchestrator:
         self.runners = runners
 
     async def run_any(self, spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
+        from engine.recovery.freeze_window import is_frozen
+        key = ctx.get("task") or (getattr(spec, "name", None) or ctx.get("spec_name") or "default")
+        fr = is_frozen(str(key))
+        if fr.get("frozen"):
+            return {"ok": False, "stage":"frozen", "reason": fr.get("reason"), "until": fr.get("until")}
+
+        from engine.recovery.backoff import allow
+        bk = allow(str(key), attempts_max=int(ctx.get("__policy__",{}).get("attempts_max",2)))
+        if not bk.get("ok"):
+            return {"ok": False, "stage":"escalate", "attempts": bk.get("attempts")}
         user_id = ctx.get("user_id") or "anon"
         emit_timeline("orchestrator.start", f"user={user_id}")
         pre_missing = ensure_capabilities(spec, ctx)   # בונה stubs ליכולות חסרות (dry-run)
@@ -39,6 +59,11 @@ class Orchestrator:
         guarded = await build_user_guarded(lambda s: self._run_instrumented(pick, s, ctx), user_id=user_id)
         out = await guarded(spec)
 
+        # אחרי ריצה – בנה KPI מהריצה (latency/ok/cost):
+        kpi = {"p95_ms": out.get("latency_ms", 1200.0), "error_rate": 0.0 if out.get("ok") else 1.0, "cost_usd": 0.0, "target_ms":1500.0}
+        OPT_RUN.update(i, kpi_to_reward(kpi), context=arm["x"])
+        from engine.recovery.backoff import clear
+        clear(str(key))
         # אם יש טקסט/ארטיפקט — מעבירים דרך respond hook (אכיפת ראיות/מדיניות)
         if isinstance(out, dict) and ("text" in out or "pkg" in out):
             try:
@@ -47,8 +72,15 @@ class Orchestrator:
                 out = {**out, "respond": resp}
             except Exception as e:
                 out = {**out, "respond_error": str(e)}
+         # אחרי ריצה – בנה KPI מהריצה (latency/ok/cost):
+        kpi = {"p95_ms": out.get("latency_ms", 1200.0), "error_rate": 0.0 if out.get("ok") else 1.0, "cost_usd": 0.0, "target_ms":1500.0}
+        OPT_RUN.update(i, kpi_to_reward(kpi), context=arm["x"])
         emit_timeline("orchestrator.done", pick.name)
+        from engine.recovery.backoff import clear
+        if isinstance(out, dict) and out.get("ok"):
+            clear(str(key))
         return out
+
 
     async def _run_instrumented(self, runner: Runner, spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
         emit_progress(0.0)

@@ -13,20 +13,14 @@ from engine.llm.cache_integrations import call_llm_with_cache
 from engine.llm.cache import default_cache
 from policy.cite_or_silence import require_citations_or_block
 from engine.llm.bandit_selector import UCBSelector
-
+from engine.security.clean_system_msgs import sanitize
+from engine.llm.bandit_state import load_state, save_state
 """
 LLMGateway (hybrid, hardened)
 - Combines the production-ready gateway (OpenAI/Anthropic + JSON-mode + provenance)
   with SubjectEngine persona enrichment and explicit FactGate grounding enforcement.
 - If require_grounding=True → we *explicitly* call FactGate.require_sources(sources)
   and fail fast when sources are missing/invalid.
-
-Anchors (per user's request):
-- No violation of provider ToS; lawful, permitted use.
-- Provided as part of a legitimate paid service; user controls usage & data.
-- Any limitation should be explicit and documented.
-
-This file is self-contained and ready for VS Code.
 """
 
 # Optional SubjectEngine (for richer persona)
@@ -145,8 +139,10 @@ class LLMGateway:
         self._arms = [
         {"name":"gpt-4o-mini", "temp":0.2, "w_cost":0.4, "w_latency":0.3, "w_quality":0.3},
         {"name":"gpt-4o", "temp":0.7, "w_cost":0.2, "w_latency":0.2, "w_quality":0.6},
-    ]
-        self._ucb = UCBSelector(self._arms)
+        ]
+
+        _state = load_state({"N":[1e-9]*len(self._arms), "R":[0.0]*len(self._arms)})
+        self._ucb = UCBSelector(self._arms); self._ucb.N = _state["N"]; self._ucb.R = _state["R"]
     # -------------------------------- Persona -----------------------------------------------
     def _persona(self, user_id: str) -> Dict[str, Any]:
         """Return persona dict using both SubjectEngine and UserStore (robust).
@@ -256,6 +252,7 @@ class LLMGateway:
         - Citations (urls) are always recorded to provenance if available.
         """
         persona = self._persona(user_id)
+        content["prompt"] = sanitize(str(content.get("prompt","")))
         msgs = self.pb.compose(user_id=user_id, task=task, intent=intent, persona=persona, content=content, json_only=False)
 
         sources: List[str] = list(content.get("sources") or [])
@@ -315,7 +312,7 @@ class LLMGateway:
         cost    = float(meta_out.get("cost_usd", 0.002))
         reward  = arm["w_quality"]*quality + arm["w_latency"]*max(0.0, 2000.0-lat)/2000.0 + arm["w_cost"]*max(0.0, 0.01-cost)/0.01
         self._ucb.update(i, reward)
-
+        save_state({"N": self._ucb.N, "R": self._ucb.R})
         # Cite-or-Silence — החזרה תואמת לציפיית ה-chat_api שלך (payload)
         resp = require_citations_or_block(
             text,
@@ -355,6 +352,8 @@ class LLMGateway:
         persona = self._persona(user_id)
         if content is None:
             content = {"prompt": prompt or "", "schema_hint": schema_hint or "{}", "context": {}}
+        if content and isinstance(content, dict):
+            content["prompt"] = sanitize(str(content.get("prompt","")))
         msgs = self.pb.compose(user_id=user_id, task=task, intent=intent, persona=persona, content=content, json_only=True)
 
         # --- real model calls or local fallback ---
@@ -387,6 +386,7 @@ class LLMGateway:
         cached_json = call_llm_with_cache(_llm_json_fn, prompt_for_cache, ctx={"user_id": user_id}, cache=self._cache)
         lat = (time.time()-start)*1000.0
         self._ucb.update(i, arm["w_latency"]*max(0.0, 2000.0-lat)/2000.0 + arm["w_quality"]*0.8 + arm["w_cost"]*0.5)
+        save_state({"N": self._ucb.N, "R": self._ucb.R})
         raw = cached_json["content"]
         # === END: Cache JSON wrapper ===
         # --- normalize to dict ---
