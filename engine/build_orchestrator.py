@@ -156,6 +156,9 @@ class BuildOrchestrator:
             "manifest": manifest,
             "files_built": sorted(py_targets),
         })
+        # allow API to persist the generated sources:
+        result["inputs"] = inputs
+        
         # Optional persist of generated sources to disk (for non-technical users)
         if persist_dir and isinstance(inputs, dict):   # 'inputs' = {path: bytes|str}
             try:
@@ -178,7 +181,9 @@ class BuildOrchestrator:
                 result["auto_pr"] = pr
             except Exception as e:
                 result["auto_pr_error"] = str(e)
+        # make original inputs available to callers (for persist)
         
+
         return result
 
     # ---------------------------- sandbox runner ----------------------------

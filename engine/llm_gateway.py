@@ -236,81 +236,84 @@ class LLMGateway:
         *,
         require_grounding: bool = False,
         temperature: float = 0.0,
-         **kw,
+        **kw,
     ) -> Dict[str, Any]:
-        """Chat answer with optional strict grounding and recorded citations.
-
-        - If require_grounding=True, we *enforce* FactGate.require_sources(sources)
-          *before* calling a model. If the gate fails → return ok=False.
-        - Citations (urls) are always recorded to provenance if available.
-        """
-        # --- CACHE: לפני יציאה לרשת ---
+        # --- REQUEST-LEVEL CACHE (Merkle) ---
         cache_key_input = {
             "fn": "chat",
             "task": task,
             "intent": intent,
-            "content": content,                 # כולל prompt/sources/context
-            "flags": {"require_grounding": require_grounding, "temperature": temperature}
+            "content": content,  # prompt/sources/context
+            "flags": {"require_grounding": bool(require_grounding), "temperature": float(temperature)},
         }
         cached = cache_get("llm_chat", cache_key_input)
         if cached:
             cached["_source"] = "cache"
             return cached
-        persona = self._persona(user_id)
-        msgs = self.pb.compose(user_id=user_id, task=task, intent=intent, persona=persona, content=content, json_only=False)
 
+        # persona + messages
+        persona = self._persona(user_id)
+        msgs = self.pb.compose(user_id=user_id, task=task, intent=intent,
+                            persona=persona, content=content, json_only=False)
+
+        # citations/provenance (best-effort)
         sources: List[str] = list(content.get("sources") or [])
         citations: List[Dict[str, Any]] = []
-
-        # Record to provenance (even if not strictly required)
         if self.prov and sources:
             for u in sources:
                 try:
-                    digest = self.prov.put(json.dumps({"url": u}, ensure_ascii=False).encode("utf-8"), {"url": u, "kind": "url"})
+                    digest = self.prov.put(json.dumps({"url": u}, ensure_ascii=False).encode("utf-8"),
+                                        {"url": u, "kind": "url"})
                     citations.append({"url": u, "digest": digest})
                 except Exception:
                     citations.append({"url": u, "digest": None})
         else:
             citations = [{"url": u, "digest": None} for u in sources]
 
-        # === Strict grounding enforcement ===
+        # Strict grounding (hard gate)
         if require_grounding:
             if not sources:
                 return {"ok": False, "error": "not_grounded", "details": "sources required but missing"}
             if not self.fact_gate:
                 return {"ok": False, "error": "not_grounded", "details": "FactGate unavailable"}
             try:
-                # Explicit hard check (from v1 semantics)
-                _ = self.fact_gate.require_sources(sources)  # type: ignore[union-attr]
-            except RefusedNotGrounded as e:  # explicit semantic failure
+                self.fact_gate.require_sources(sources)  # may raise RefusedNotGrounded
+            except RefusedNotGrounded as e:
                 return {"ok": False, "error": "not_grounded", "details": str(e)}
-            except Exception as e:  # unexpected gate failure
+            except Exception as e:
                 return {"ok": False, "error": "gate_error", "details": str(e)}
-        
+
+        # --- PROVIDER CALL (with provider-level cache that כבר קיים אצלך) ---
         meta = {
             "model": self.oa_chat_model if _HAS_OPENAI else (self.claude_model if _HAS_ANTHROPIC else "local"),
-            "system_v": "1", "template_v": "1",
-            "tools": [], "ctx_ids": [], "persona_v": "1", "policy_v": "1",
+            "system_v": "1", "template_v": "1", "tools": [], "ctx_ids": [], "persona_v": "1", "policy_v": "1",
             "ttl_s": 3600, "allow_near_hit": True
         }
         prompt = {"user_text": msgs[-1]["content"], "meta": meta}
-        def _llm_fn(p):  # עוטף את הקריאה האמיתית
+
+        def _llm_fn(p):
             if _HAS_OPENAI:
                 return {"content": self._openai_chat(msgs, json_mode=False, temperature=temperature)}
             elif _HAS_ANTHROPIC:
                 return {"content": self._anthropic_chat(msgs, json_mode=False, temperature=temperature)}
             else:
                 return {"content": self._local_answer(msgs, sources)}
-        
-        cached = call_llm_with_cache(_llm_fn, prompt, ctx={"user_id": user_id}, cache=self._cache)
-        text = cached["content"]
 
-        payload = {
-            "text": text,
-            "citations": citations,
-            "root": (citations[0].get("digest") if citations else None) or "prov",
-        }
+        # שימוש ב-cache הפנימי שקיים אצלך (אל תמחק)
+        out = call_llm_with_cache(_llm_fn, prompt, ctx={"user_id": user_id}, cache=self._cache)
+        text = out["content"]
+
+        payload = {"text": text, "citations": citations,
+                "root": (citations[0].get("digest") if citations else None) or "prov"}
+
+        # --- SAVE TO REQUEST-LEVEL CACHE (Merkle) ---
+        try:
+            cache_put("llm_chat", cache_key_input, {"ok": True, "payload": payload})
+        except Exception:
+            pass
+
         return {"ok": True, "payload": payload}
+
 
     def structured(
         self,

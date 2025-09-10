@@ -19,13 +19,12 @@ from engine.orchestrator.universal_orchestrator import (
     OrchestratorConfig,   # מאפשר בחירה בין poc/live/prod
 )
 
-from user_model.model import UserStore
+from user_model.model import UserStore, UserModel
 from user_model.subject import SubjectEngine
 from grounded.fact_gate import RefusedNotGrounded
 from engine.runtime.approvals import required_approvals
 from engine.blueprints.registry import resolve as resolve_blueprint
 from pathlib import Path
-from engine.runtime.approvals import required_approvals
 from engine.runtime.consent_store import ConsentStore
 CONS = ConsentStore(".imu/consents.json")
 
@@ -34,6 +33,8 @@ CONS = ConsentStore(".imu/consents.json")
 # =====================================================
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+US = UserStore("./assurance_store_users")
+UM = UserModel(US)
 
 # --- Global runtime singletons (שימוש־חוזר) ---
 SESS: Dict[str, SessionState] = {}
@@ -50,6 +51,40 @@ BUILDER = BuildOrchestrator()
 _ORCS: Dict[str, UniversalOrchestrator] = {}
 
 # ------------------------- Utilities -------------------------
+
+def _tone(uid: str) -> str:
+    try:
+        # אם יש SubjectEngine – קח ממנו טון
+        from user_model.subject import SubjectEngine as SUBJ
+        # הנח ש-SUBJ הוזנק איפשהו בגנרל. אם לא – טון 'friendly'.
+        return SUBJ.persona(uid).get("tone", {}).get("style", "friendly")
+    except Exception:
+        return "friendly"
+
+def _humanize_build_failure(uid: str, build: Dict[str, Any]) -> str:
+    style = _tone(uid)
+    # שתי מפות טון לדוגמה; ניתן להרחיב לפי personae:
+    friendly = {
+        "compile": "הקוד לא הידר. מטפל בזה ומריצה שוב.",
+        "test": "חלק מהבדיקות נפלו. מתקן ומריץ שוב.",
+        "e2e": "בדיקות קצה־לקצה לא עברו. מנסה לתקן אוטומטית.",
+        "stuck": "הבנייה נתקעה. אני מתקן ומנסה שוב.",
+    }
+    concise = {
+        "compile": "כשל קומפילציה. מתקן ורץ שוב.",
+        "test": "בדיקות נפלו. מתקן ורצה שוב.",
+        "e2e": "כשל E2E. מתקן ורץ שוב.",
+        "stuck": "בנייה נתקעה. מנסה שוב.",
+    }
+    lex = friendly if style != "concise" else concise
+    if build.get("compile_rc", 0) != 0:
+        return lex["compile"]
+    if build.get("test_rc", 0) != 0:
+        return lex["test"]
+    if build.get("e2e_rc", 0) != 0:
+        return lex["e2e"]
+    return lex["stuck"]
+
 
 def _say(uid: str, st: SessionState, text: str, extra: Optional[Dict[str, Any]] = None):
     """רישום תשובת assistant בזיכרון + החזרת JSON עקבי לקליינט."""
@@ -126,10 +161,7 @@ def _planning_assist(uid: str, spec: Dict[str, Any], ctx: Dict[str, Any]) -> Dic
         user_id=uid, task="planning", intent="build_architecture",
         schema_hint=schema, prompt=prompt, temperature=0.1
     )
-    if not res.get("ok"):
-        from engine.self_heal.auto_pr import run as auto_pr_run
-        pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
-        res["auto_pr"] = pr
+
     return res.get("json") or {}
 
 # -------------------------- Public Endpoints --------------------------
@@ -258,11 +290,35 @@ async def send(body: Dict[str, Any]):
 
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
+    
+    import os
+    from engine.self_heal.controller import self_heal_once, classify_failure
+
+    max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
+    attempt = 0
+    build = res.get("build", {})
+    files = build.get("inputs", {}) or {}
+
+    while not res.get("ok") and attempt < max_attempts and isinstance(files, dict) and files:
+        attempt += 1
+        cls = classify_failure(build)
+        fixed, note = self_heal_once(spec_refined, files, build, cls)
+        if not fixed:
+            break
+        new_build = await BUILDER.build_python_module(fixed, name="app_generated")
+        res = {**res, "build": new_build, "ok": bool(new_build.get("ok"))}
+        if res["ok"]:
+            break
+        build = new_build
+        files = fixed
+    
     if not res.get("ok"):
         from engine.self_heal.auto_pr import run as auto_pr_run
         pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
         res["auto_pr"] = pr
-        
+        friendly = _humanize_build_failure(res.get("build", {}))
+        return _say(uid, st, friendly, extra={"spec": spec_refined, **res})
+    
     # --- Optional post-build actions for non-technical flow ---
     persist_dir = body.get("persist")
     emit_ci     = bool(body.get("emit_ci"))
@@ -326,15 +382,18 @@ async def send(body: Dict[str, Any]):
     else:
         txt = "הבנייה נכשלה — בדוק לוגים"
 
+    from engine.deploy.rollback import suggest_rollback
+    rb = suggest_rollback(spec_refined.get("title","app"))
     extra = {
         "mode": mode,
         "spec": spec_refined,
         "analysis": analysis,
         "files_written": written,
         "deploy_script": deploy_script,
-        **res  # build, tools, missing, instructions, blueprint, domain...
+        **res,  # build, tools, missing, instructions, blueprint, domain...
+        "rollback": rb
     }
-    return _say(uid, st, txt, extra=extra)
+    return _say(uid, st, txt + " (הפעלתי סיוע מתקדם.)", extra = extra)
 
 @router.post("/consent")
 def consent(body: Dict[str,Any]):
@@ -348,3 +407,11 @@ def consent(body: Dict[str,Any]):
         CONS.put_secret(uid, str(k), str(v))
     CONS.set_flag(uid, "auto_install", auto_install)
     return {"ok": True, "msg": "consents recorded"}
+
+@router.post("/preferences")
+def set_preferences(body: Dict[str,Any]):
+    uid = (body.get("user_id") or "user").strip()
+    tone = (body.get("tone") or {})
+    for k,v in tone.items():
+        UM.pref_set(uid, f"tone.{k}", v, confidence=0.9)
+    return {"ok": True}
