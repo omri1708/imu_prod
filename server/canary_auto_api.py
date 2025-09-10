@@ -30,7 +30,7 @@ class GateChecks(BaseModel):
     ref: Optional[str] = None
     pr_number: Optional[int] = None
     required: list[str] = Field(default_factory=list)
-    mode: str = Field("all", regex="^(all|any)$")
+    mode: str = Field("all", pattern="^(all|any)$")
     token_env: str = "GITHUB_TOKEN"
 
 class GateP95(BaseModel):

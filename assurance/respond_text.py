@@ -45,7 +45,8 @@ class GroundedResponder:
                 add_evidence_to_session(sess, ev)
                 digests.append((ev.source, ev.digest))
             elif "url" in s:
-                if not hp: raise ResourceRequired("tool:requests", "pip install requests")
+                if not hp:
+                    raise ResourceRequired("tool:requests", "pip install requests")
                 ev = hp.fetch(s["url"], trust=0.6)
                 add_evidence_to_session(sess, ev)
                 digests.append((ev.source, ev.digest))

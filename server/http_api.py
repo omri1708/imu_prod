@@ -14,7 +14,6 @@ from server.stream_wfq import BROKER  # WFQ Broker
 from policy.rbac import require_perm
 
 APP = FastAPI(title="IMU Adapter API")
-app = FastAPI(...)
 if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -31,7 +30,7 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
             OTLPSpanExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
         ))
         trace.set_tracer_provider(tp)
-        FastAPIInstrumentor.instrument_app(app)
+        FastAPIInstrumentor.instrument_app(APP)
     except Exception as e:
         # לא לשבור אם אין חבילות מותקנות:
         pass
@@ -75,7 +74,7 @@ from server.emergency_api import router as emergency_router
 from server.routers.adapters_secure import router as adapters_secure_router
 from server.routers.chat_api import router as chat_router
 from server.routers.program_api import router as program_router
-from server.orchestrate_api import router as orchestrate_router
+from server.routers.orchestrate_api import router as orchestrate_router
 
 _synth_reload()
 
@@ -138,13 +137,19 @@ def sha256_bytes(b: bytes) -> str:
 
 def _os_family() -> str:
     sysname = platform.system().lower()
-    if "windows" in sysname: return "win"
-    if "darwin" in sysname: return "mac"
+    if "windows" in sysname:
+        return "win"
+    if "darwin" in sysname:
+        return "mac"
     return "linux"
 
 def _p95_ceiling_ms(user_id: str, route: str) -> int:
     # אפשר להרחיב לפי משתמש ממש; כאן ceiling ברירת מחדל
     return int(os.environ.get("IMU_P95_MS", "5000"))
+
+@APP.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 # ---------- Models ----------
 class Evidence(BaseModel):
@@ -163,7 +168,8 @@ class RunResult(BaseModel):
 @APP.get("/api/policy/network/{user_id}")
 async def get_net_policy(user_id: str):
     p = POLICY_DB.get(user_id)
-    if not p: raise HTTPException(404, "no policy")
+    if not p:
+        raise HTTPException(404, "no policy")
     return JSONResponse(content={
         "default_deny": p.default_deny,
         "rules": [r.__dict__ for r in p.rules],

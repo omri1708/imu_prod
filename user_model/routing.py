@@ -4,9 +4,16 @@ import os, json
 from typing import Dict, Any, Optional, List
 from user_model.memory import UserMemory
 
-ROOT = "/mnt/data/imu_repo"
+ROOT = os.getenv("IMU_ROOT_DIR")
+if not ROOT:
+    if os.path.exists("/mnt/data"):
+        ROOT = "/mnt/data/imu_repo"
+    else:
+        ROOT = os.path.join(os.getcwd(), "imu_repo")
+
 STATE_DIR = os.path.join(ROOT, "state")
 os.makedirs(STATE_DIR, exist_ok=True)
+
 USERS_FILE = os.path.join(STATE_DIR, "users.json")
 
 _DEFAULT = {

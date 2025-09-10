@@ -168,7 +168,7 @@ def tasks():
 class CreateReq(BaseModel):
     user_id: str = "demo-user"
     kind: str = Field(..., description="see /scheduler/tasks")
-    mode: str = Field("at", regex="^(at|interval)$")
+    mode: str = Field("at", pattern="^(at|interval)$")
     at_ts: Optional[float] = None
     interval_s: Optional[float] = None
     args: Dict[str,Any] = Field(default_factory=dict)

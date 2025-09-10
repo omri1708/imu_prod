@@ -3,8 +3,12 @@ import os
 import  builtins
 
 SRC_PREFIX = "/mnt/data/imu_repo"
-DST_PREFIX = os.environ.get("IMU_DATA_ROOT", os.path.join(os.getcwd(), "runs"))
-os.makedirs(DST_PREFIX, exist_ok=True)
+DST_PREFIX = os.environ.get("IMU_DATA_ROOT") or "/tmp/imu_runs"
+try:
+    os.makedirs(DST_PREFIX, exist_ok=True)
+except Exception:
+    DST_PREFIX = "/tmp/imu_runs"
+    os.makedirs(DST_PREFIX, exist_ok=True)
 
 def _map_path(p: str) -> str:
     p = str(p)

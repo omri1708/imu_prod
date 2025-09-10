@@ -15,7 +15,7 @@ class StatusReq(BaseModel):
     owner: str
     repo: str
     sha: str
-    state: str = Field(..., regex="^(success|failure|error|pending)$")
+    state: str = Field(..., pattern="^(success|failure|error|pending)$")
     context: str = Field("IMU/Gatekeeper")
     description: str = Field("", max_length=140)
     target_url: Optional[str] = None

@@ -37,8 +37,10 @@ class _ClaimCtx:
     def snapshot(self) -> List[Dict[str,Any]]:
         return list(self._evidences)
 
+
 # singleton
 _CTX = _ClaimCtx()
 
 def current() -> _ClaimCtx:
     return _CTX
+

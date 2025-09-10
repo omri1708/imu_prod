@@ -5,7 +5,8 @@ import os, json, hashlib, hmac, time, secrets
 
 from engine.config import load_config, save_config
 
-from grounded.claims import current, respond_with_evidence, GateDenied
+from grounded.claims import current
+from grounded.gate import GateDenied, enforce_all
 from alerts.notifier import alert, metrics_log
 from grounded.provenance import sign_evidence, persist_record, verify_signature
 
@@ -20,14 +21,16 @@ except Exception:
     import threading
     _local = threading.local()
     def current():
-        if not hasattr(_local, "ev"): _local.ev = _Claims()
+        if not hasattr(_local, "ev"):
+            _local.ev = _Claims()
         return _local.ev
     class _Claims:
         def __init__(self): self.buf=[]
         def add_evidence(self, key: str, ev: Dict[str,Any]): self.buf.append((key, ev))
         def drain(self)->List[Dict[str,Any]]:
             out=[]
-            for k,e in self.buf: out.append(dict(e, key=k))
+            for k,e in self.buf:
+                out.append(dict(e, key=k))
             self.buf.clear()
             return out
 
@@ -101,10 +104,11 @@ async def guarded_handler(fn: Callable[[Any], Awaitable[Any]],
         t0 = time.time()
         try:
             # איפוס/איסוף קונטקסט לפי בקשה (פשוט לאיפוס ישיר)
-            cur = current(); cur.clear()
+            cur = current()
+            cur.clear()
             # הציפייה היא שה-handler עצמו יקרא current().add_evidence(...) עבור כל קביעה מגובה.
             txt = await fn(inp)
-            out = respond_with_evidence(txt, min_trust=min_trust)
+            out = enforce_all(txt, min_trust = min_trust)
             dt = (time.time()-t0)*1000.0
             metrics_log("guarded_handler", {"ok": True, "latency_ms": dt, "claims": len(out["claims"])})
             return out

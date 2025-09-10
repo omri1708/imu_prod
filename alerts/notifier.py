@@ -4,8 +4,16 @@ import os, json, time, threading
 from typing import Dict, Any, Tuple
 
 # ניתן לכוון מיקום לוגים עם ENV: IMU_LOG_DIR (#TODO )
-ROOT = os.getenv("IMU_LOG_DIR", "/mnt/data/imu_repo/logs")
+
+ROOT = os.getenv("IMU_LOG_DIR")
+if not ROOT:
+    if os.path.exists("/mnt/data"):
+        ROOT = "/mnt/data/imu_repo/logs"
+    else:
+        ROOT = os.path.join(os.getcwd(), "logs")
+
 os.makedirs(ROOT, exist_ok=True)
+
 _alert_f = os.path.join(ROOT, "alerts.jsonl")
 _metrics_f = os.path.join(ROOT, "metrics.jsonl")
 _lock = threading.RLock()

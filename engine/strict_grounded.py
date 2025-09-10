@@ -4,7 +4,7 @@ import hashlib, json
 from typing import Any, Callable, Awaitable, Dict, Optional
 
 from engine.evidence_middleware import guarded_handler, current
-from user_model.policy import resolve_gate
+from user_model.routing import resolve_gate
 
 def _auto_claim(x: Any) -> Dict[str,Any]:
     """

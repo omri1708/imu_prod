@@ -31,9 +31,18 @@ def _pick_root() -> str:
             continue
     return os.getcwd()
 
-ROOT = _pick_root()
+# Prefer explicit envs, then writable fallbacks
+ROOT = os.environ.get("IMU_PROV_ROOT") or os.environ.get("IMU_ROOT") or _pick_root()
+try:
+    os.makedirs(ROOT, exist_ok=True)
+except Exception:
+    # last-resort fallback to /tmp
+    ROOT = "/tmp/assurance_store_text"
+    os.makedirs(ROOT, exist_ok=True)
 STORE = os.path.join(ROOT, ".provenance")
+os.makedirs(STORE, exist_ok=True)
 LOGS = os.path.join(ROOT, "logs")
+os.makedirs(LOGS, exist_ok=True)
 PROV_LOG = os.path.join(LOGS, "provenance.jsonl")
 
 def _ensure_dirs():

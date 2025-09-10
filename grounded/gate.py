@@ -1,6 +1,6 @@
 # imu_repo/grounded/gate.py
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 import time
 from grounded.provenance_store import verify
 
@@ -27,7 +27,8 @@ def enforce_all(claims: List[Dict[str, Any]],
     for c in claims:
         dg = c.get("digest")
         if not dg:
-            out["reasons"].append("claim_missing_digest"); continue
+            out["reasons"].append("claim_missing_digest")
+            continue
         thr = float(c.get("min_trust", min_trust))
         v = verify(dg, require_hmac=require_hmac, min_trust=thr)
         if not v.get("ok"):
@@ -37,7 +38,7 @@ def enforce_all(claims: List[Dict[str, Any]],
         if max_age_s is not None:
             ts = int(meta.get("fetched_at", 0))
             if ts and now - ts > max_age_s:
-                out["reasons"].append(f"stale:{dg}"); 
+                out["reasons"].append(f"stale:{dg}")
                 continue
         out["checked"].append({"digest": dg, "meta": meta})
 

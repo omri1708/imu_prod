@@ -31,7 +31,8 @@ FS_DB = FsPolicyDB()
 
 def is_path_allowed(user_id: str, path: str, write: bool) -> bool:
     p = FS_DB.get(user_id)
-    if not p: return False
+    if not p:
+        return False
     ap = os.path.abspath(os.path.expanduser(path))
     for r in p.rules:
         base = os.path.abspath(os.path.expanduser(r.path))
@@ -43,7 +44,8 @@ def is_path_allowed(user_id: str, path: str, write: bool) -> bool:
 
 def cleanup_ttl(user_id: str):
     p = FS_DB.get(user_id)
-    if not p: return
+    if not p:
+        return
     now = time.time()
     for r in p.rules:
         base = os.path.abspath(os.path.expanduser(r.path))
@@ -53,13 +55,15 @@ def cleanup_ttl(user_id: str):
                 try:
                     st = os.stat(fp)
                     if now - st.st_mtime > r.ttl_seconds:
-                        if os.path.isdir(fp): shutil.rmtree(fp, ignore_errors=True)
-                        else: os.remove(fp)
+                        if os.path.isdir(fp):
+                            shutil.rmtree(fp, ignore_errors=True)
+                        else:
+                            os.remove(fp)
                 except FileNotFoundError:
                     pass
 
 # דוגמת sandbox למשתמש דמו:
-_default_root = "/mnt/data/imu_repo/var/demo-user"
+_default_root = os.path.join(os.getcwd(), "var/demo-user")
 os.makedirs(_default_root, exist_ok=True)
 FS_DB.put(UserFsPolicy(
     user_id="demo-user",

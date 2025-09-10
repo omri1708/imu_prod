@@ -4,7 +4,7 @@ import os, json, time, hashlib
 from typing import Dict, Any, List, Optional
 from grounded.provenance import STORE
 
-STATE_DIR = "/mnt/data/imu_repo/.state"
+STATE_DIR = os.getenv("IMU_STATE_DIR", os.path.join(os.getcwd(), ".state"))
 SRC_DB = os.path.join(STATE_DIR, "sources.json")
 os.makedirs(STATE_DIR, exist_ok=True)
 
