@@ -3,7 +3,13 @@ from __future__ import annotations
 import os, json, time
 from typing import Dict, Any
 
-STATE_DIR = "/mnt/data/imu_repo/.state/explore"
+STATE_DIR = os.getenv("IMU_STATE_DIR")
+if not STATE_DIR:
+    if os.path.exists("/mnt/data"):
+        STATE_DIR = "/mnt/data/imu_repo/.state/explore"
+    else:
+        STATE_DIR = os.path.join(os.getcwd(), ".state", "explore")
+
 os.makedirs(STATE_DIR, exist_ok=True)
 
 def _path(key: str) -> str:

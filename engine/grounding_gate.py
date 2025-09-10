@@ -1,8 +1,6 @@
 # engine/grounding_gate.py
 from typing import Dict, Any, List
-from ..policy.policy_enforcer import PolicyEnforcer, PolicyViolation
-from ..policy.user_policy import UserPolicy
-from typing import List, Dict, Any
+from policy.policy_enforcer import PolicyEnforcer, PolicyViolation
 from policy.model import UserPolicy
 from provenance.sign import require_signed
 

@@ -14,14 +14,12 @@ from engine.explore_policy_ctx import decide_explore_ctx
 from engine.explore_state import mark_explore, mark_regression, clear_regression
 from engine.provenance_gate import enforce_evidence_gate, GateFailure
 from engine.pipeline_respond_hook import pipeline_respond
-
-from synth.validators import validate_spec, validate_plan, validate_package
-from synth.generate_ab import generate_variants
+from synth.generate_ab import generate_variants_with_prior_and_explore as generate_variants
 from synth.generate_ab_prior import generate_variants_with_prior
 from synth.generate_ab_explore import generate_variants_with_prior_and_explore
 from user_model.intent import infer_intent
 from grounded.claims import current
-from policy.policy_engine import PolicyEngine
+from policy.policy_rules import PolicyEngine
 from ui.package import build_ui_artifact
 from engine.audit_log import record_event
 from security.fingerprint_report import report_fingerprint

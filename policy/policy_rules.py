@@ -29,8 +29,15 @@ class RateLimit:
 
 @dataclass
 class UserPolicy:
+    enforce_user_subspace: bool
+    allow_external_net: bool
+    require_strong_sources: bool
     user_id: str
-    trust_level: str = "basic"
+    trust_level: str
+    require_evidence: True
+    require_freshness_seconds: Optional[int]
+    max_claims_per_response: int
+    max_ops_per_request: int
     # TTL per artifact/evidence type (seconds)
     ttl_seconds: Dict[str, int] = field(default_factory=lambda: {
         "evidence": 90 * 24 * 3600,   # 90d

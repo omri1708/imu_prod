@@ -119,7 +119,7 @@ def _is_buildspec(x: Any) -> bool:
         return False
 
 # --------- בניית Runner-ים בפועל (ממופים ל-Shims)
-from .shims import run_vm, run_events_spec, run_synth_v1, run_ab_explore, run_buildspec, run_buildspec_multi
+from engine.pipelines.shims import run_vm, run_events_spec, run_ab_explore, run_buildspec, run_buildspec_multi
 
 def default_runners() -> List[Runner]:
     return [
@@ -128,5 +128,4 @@ def default_runners() -> List[Runner]:
         Runner("ab_explore", _is_ab_spec, run_ab_explore),
         Runner("buildspec_full", _is_buildspec, run_buildspec),
         Runner("buildspec_multi", _is_buildspec, run_buildspec_multi),
-        Runner("synth_v1", _is_json_spec_string, run_synth_v1),
     ]

@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 from provenance.cas import CAS
 from security.signing import sign_manifest, verify_manifest
 from provenance.trust_registry import TrustRegistry
-from policy.freshness_profiles import get_profile
+from policy.freshness_profile import get_profile
 
 class ProvenanceError(Exception): ...
 class TrustError(ProvenanceError): ...

@@ -1,9 +1,9 @@
 # imu_repo/engine/provenance_gate.py
 from __future__ import annotations
 from typing import List, Dict, Any
-from provenance.provenance import aggregate_trust, evidence_expired, now_ts
-from policy.freshness_profiles import get_profile
-from policy.policy_engine import PolicyEngine
+from provenance.provenance import aggregate_trust, now_ts
+from policy.freshness_profile import get_profile
+from policy.policy_rules import PolicyEngine
 import os, json
 
 class GateFailure(Exception): ...

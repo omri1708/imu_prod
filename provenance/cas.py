@@ -1,10 +1,8 @@
 # imu_repo/provenance/cas.py
 from __future__ import annotations
 import os, json, hashlib, time, stat, threading
-from typing import Optional, Dict, Any, Tuple, Iterable
+from typing import Optional, Dict, Any, Literal, Iterable
 from dataclasses import dataclass, asdict
-from typing import Optional, Literal, Dict
-from policy.user_policies import ttl_for
 
 class CASError(Exception): ...
 class IntegrityError(CASError): ...
@@ -43,7 +41,8 @@ class ContentAddressableStore:
         p = self._path(digest)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         if not os.path.exists(p):
-            with open(p, "wb") as f: f.write(b)
+            with open(p, "wb") as f:
+                f.write(b)
         with open(p+".meta.json","w", encoding="utf-8") as f:
             json.dump(asdict(meta), f, ensure_ascii=False, indent=2)
         return digest
@@ -73,7 +72,8 @@ class ContentAddressableStore:
                     blob_path = meta_path[:-10]
                     for path in (blob_path, meta_path):
                         if os.path.exists(path):
-                            os.remove(path); removed += 1
+                            os.remove(path)
+                            removed += 1
         return removed
 
 CAS = ContentAddressableStore(root=os.getenv("IMU_CAS_ROOT","./.imu_cas"))
@@ -89,14 +89,16 @@ class EvidenceMeta:
     signature: Optional[str] = None # מקום לחתימה, אם קיימת
 
 def _hash_bytes(b: bytes) -> str:
-    h = hashlib.sha256(); h.update(b); return h.hexdigest()
+    h = hashlib.sha256(); h.update(b)
+    return h.hexdigest()
 
 def put_blob(content: bytes, meta: EvidenceMeta) -> str:
     h = _hash_bytes(content)
     path_blob = os.path.join(CAS_ROOT, h)
     path_meta = path_blob + ".json"
     if not os.path.exists(path_blob):
-        with open(path_blob, "wb") as f: f.write(content)
+        with open(path_blob, "wb") as f:
+            f.write(content)
     with open(path_meta, "w", encoding="utf-8") as f:
         json.dump(asdict(meta), f, ensure_ascii=False, indent=2)
     return h

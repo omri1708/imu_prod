@@ -8,12 +8,10 @@ from engine.pipeline import Engine as VMEngine                  # (6)
 from engine.pipeline_events import run_pipeline_spec            # (3)
 from engine.pipeline_multi import run_pipeline_multi            # (4)
 # שלוש גרסאות synthesis_pipeline: נגדיר עטיפות בטוחות:
-# (7) גרסת "v1" שמקבלת user:str, spec_text:str
-from engine.synthesis_pipeline import run_pipeline as synth_v1_run  # אם קיימת פונקציה זו
 # (8) גרסת A/B async שמקבלת dict
-from engine.synthesis_pipeline import run_pipeline as ab_run_async   # זהה בשם, אבל async ומקבל dict
+from engine.synthesis_pipeline_ph105 import run_pipeline as ab_run_async   # זהה בשם, אבל async ומקבל dict
 # (9) גרסת BuildSpec מלאה
-from engine.synthesis_pipeline import run_pipeline as buildspec_run  # זהה בשם, אבל מקבל BuildSpec
+from engine.synthesis_pipeline import SynthesisPipeline as buildspec_run  # זהה בשם, אבל מקבל BuildSpec
 
 # שים לב: כיון ששלוש הגרסאות חולקות שם קובץ, לעיתים תצטרך לייבא לפי נתיב ייחודי
 # או לפצל לקבצים שונים. כאן אנו מניחים שהן זמינות כפי ששיתפת.
@@ -33,12 +31,6 @@ async def run_events_spec(spec_text: str, ctx: Dict[str,Any]) -> Dict[str,Any]:
     # pipeline_events כבר אוכף חוזים/ראיות; כאן רק מחזירים מזהה ריצה
     return {"ok": True, "run_id": run_id}
 
-# ---------- Synth v1 (plan/generate/test/verify/package) ----------
-async def run_synth_v1(spec_text: str, ctx: Dict[str,Any]) -> Dict[str,Any]:
-    user = ctx.get("user_id","anon")
-    out = synth_v1_run(user, spec_text)  # מצפה שתחזיר dict עם ok/pkg/claims/evidence וכו'
-    return dict(out or {}, ok=bool(out.get("ok", True)))
-
 # ---------- A/B Explore (async, dict{name,goal}) ----------
 async def run_ab_explore(spec: Dict[str,Any], ctx: Dict[str,Any]) -> Dict[str,Any]:
     user = ctx.get("user_id","anon")
@@ -50,7 +42,7 @@ async def run_ab_explore(spec: Dict[str,Any], ctx: Dict[str,Any]) -> Dict[str,An
 # ---------- BuildSpec מלא ----------
 async def run_buildspec(spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
     user = ctx.get("user_id","anon")
-    out = buildspec_run(spec, out_root=ctx.get("out_root") or "/mnt/data/imu_builds", user_id=user)
+    out = buildspec_run.run(spec, out_root=ctx.get("out_root") or "/mnt/data/imu_builds", user_id=user)
     return dict(out or {}, ok=True)
 
 # ---------- BuildSpec Multi (אם יש פיצול) ----------

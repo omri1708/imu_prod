@@ -17,7 +17,6 @@ _orch = Orchestrator(default_runners())
 _KIND_MAP = {
     "vm": shims.run_vm,
     "events": shims.run_events_spec,
-    "synth_v1": shims.run_synth_v1,
     "ab_explore": shims.run_ab_explore,
     "buildspec": shims.run_buildspec,
     "buildspec_multi": shims.run_buildspec_multi,
