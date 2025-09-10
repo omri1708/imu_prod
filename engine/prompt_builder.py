@@ -11,12 +11,14 @@ DEFAULT_TEMPLATES = [
   {"id":"json",    "sys":"החזר JSON תקין בלבד. בלי טקסט חופשי.", "usr":"{prompt}\n\nסכמה: {schema_hint}"},
   {"id":"ux_discovery","sys":"אתה אנליסט מוצר. תשאל שאלות קצרות ומעשיות כדי להשלים אפיון UX (מסכים, ניווט, הרשמה, פעולות, נתונים, בידול). בלי ז'רגון טכני.","usr":"בקשה: {prompt}\nאם חסרים פרטים, שאל ברשימת שאלות ממוספרת."},
   {"id":"spec_refine","sys":"אתה מתכנן מערכות. הפוך אפיון UX למסמך JSON קנוני: components, screens, nav, data, flows, differentiation. החזר JSON תקין בלבד.","usr":"תוכן:\n{prompt}\nסכמה: {schema_hint}"},
-  {"id":"json","sys":"החזר JSON תקני בלבד, ללא טקסט חופשי.","usr":"{prompt}\nסכמה: {schema_hint}"}
 ]
 
 def _stats_skeleton(templates: List[Dict[str,Any]]) -> Dict[str,Any]:
     return {t["id"]: {"n":0,"ok":0,"ms_sum":0.0,"last":0} for t in templates}
 
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return ""
 
 class PromptBuilder:
     def __init__(self, templates_path:str="./config/prompt_templates.jsonl", stats_path:str="./assurance_store/pb.stats.json"):
@@ -112,27 +114,41 @@ class PromptBuilder:
                 return t
         return DEFAULT_TEMPLATES[0]
 
-    def compose(self, user_id:str, task:str, intent:str,
-                persona:Dict[str,Any], content:Dict[str,Any], json_only:bool=False) -> List[Dict[str,str]]:
+
+    def compose(self, user_id: str, task: str, intent: str,
+                persona: Dict[str, Any], content: Dict[str, Any], json_only: bool = False) -> List[Dict[str, str]]:
         t = self._pick(task, intent, json_only)
+
+        # אם התבנית דורשת schema_hint והוא לא קיים — fallback ל־plain
+        if "{schema_hint}" in t["usr"] and not content.get("schema_hint"):
+            t = self._get_plain_template()
+
         ctx = content.get("context") or {}
         sys = (
-            t["sys"] +
-            f"\n[persona]={json.dumps(persona, ensure_ascii=False)}" +
-            f"\n[context]={json.dumps(ctx, ensure_ascii=False)}" +
-            f"\n[task]={task} [intent]={intent}"
+            t["sys"]
+            + f"\n[persona]={json.dumps(persona, ensure_ascii=False)}"
+            + f"\n[context]={json.dumps(ctx, ensure_ascii=False)}"
+            + f"\n[task]={task} [intent]={intent}"
         )
-        usr = t["usr"].format(**{k:v for k,v in content.items() if k in ("prompt","schema_hint")})
-        return [{"role":"system","content":sys},{"role":"user","content":usr}]
+
+        # מפה בטוחה עם דיפולטים ריקים למפתחות חסרים
+        mapping = _SafeDict({
+            "prompt": str(content.get("prompt", "")),
+            "schema_hint": str(content.get("schema_hint", "")),
+        })
+
+        usr = t["usr"].format_map(mapping)
+        return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+
 
     def learn(self, template_id:str, user_id:str, task:str, intent:str, success:bool, latency_ms:float|None=None, error:str|None=None):
         # מעדכן את כל התבניות שהיו בשימוש לאחרונה (כאן אין tracking פר תבנית, אז נעדכן כולן בעדינות)
         now_ms = int(time.time()*1000)
-        st = self.stats.setdefault(template_id, {"n":0,"ok":0,"ms":0.0})
+        st = self.stats.setdefault(template_id, {"n":0,"ok":0,"ms_sum":0.0})
         st ["n"] += 1
         st["ok"] += 1 if success else 0
         if latency_ms:
-            st["ms"] += float(latency_ms)
+            st["ms_sum"] += float(latency_ms)
         for tid, s in self.stats.items():
             if not isinstance(s, dict):
                 s = {}

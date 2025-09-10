@@ -3,8 +3,7 @@
 # imu_repo/user_model/consciousness.py
 from __future__ import annotations
 from typing import Dict, Any
-import math, time
-from user_model.memory_store import get_profile, put_event
+from user_model.memory_store import get_profile
 
 def merge_beliefs(uid: str) -> Dict[str,Any]:
     """תמונת 'מודעות' מינימלית: העדפות (T1) + אמונות/מטרות (T2) כרמות בין 0..1."""

@@ -63,9 +63,6 @@ def stable_user_id(email_or_name: str) -> str:
     uid = hmac.new(key, msg, hashlib.sha256).hexdigest()[:16]
     return uid
 
-def user_dir(uid: str) -> str:
-    return os.path.join(ROOT, uid)
-
 def keys_path(uid: str) -> str:
     return os.path.join(user_dir(uid), "keys.json")
 

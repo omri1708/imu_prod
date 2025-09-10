@@ -11,6 +11,8 @@ from user_model.model import UserStore
 from engine.llm.cache_integrations import call_llm_with_cache
 from engine.llm.cache import default_cache
 from engine.cache.merkle_cache import get as cache_get, put as cache_put
+import socket
+from urllib.parse import urlparse
 
 """
 LLMGateway (hybrid, hardened)
@@ -88,6 +90,29 @@ def _env(name: str, default: str) -> str:
 
 def _ensure_list(x: Any) -> List[Any]:
     return x if isinstance(x, list) else ([] if x is None else [x])
+
+
+def _ensure_json_instruction(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    OpenAI JSON mode requires that at least one message contains the word 'json'.
+    If missing, prepend a strict system instruction that includes 'json'.
+    """
+    try:
+        has_json = any(
+            isinstance(m, dict)
+            and isinstance(m.get("content"), str)
+            and ("json" in m["content"].lower())
+            for m in msgs
+        )
+    except Exception:
+        has_json = False
+    if has_json:
+        return msgs
+    instr = (
+        "Return a single valid JSON object (json) only. "
+        "No markdown, no code fences, no prose. If empty, return {}."
+    )
+    return [{"role": "system", "content": instr}] + msgs
 
 class LLMGateway:
     """Unified LLM gateway with persona, provenance & strict grounding.
@@ -196,6 +221,9 @@ class LLMGateway:
         model = model or (self.oa_json_model if json_mode else self.oa_chat_model)
         params: Dict[str, Any] = {"model": model, "messages": messages, "temperature": float(temperature)}
         if json_mode:
+            # חובה: לוודא שההודעות מכילות את המילה 'json'
+            messages = _ensure_json_instruction(messages)
+            params["messages"] = messages  # לעדכן אחרי ההזרקה
             params["response_format"] = {"type": "json_object"}
         resp = _openai_client.chat.completions.create(**params)
         return resp.choices[0].message.content or ""
@@ -225,6 +253,56 @@ class LLMGateway:
             if t in (None, "text"):
                 return getattr(p, "text", p.get("text", "")) if isinstance(p, dict) else (getattr(p, "text", "") or "")
         return ""
+
+
+    def diagnose(self) -> Dict[str, Any]:
+        """
+        Fast, local readiness probe for the planner/gateway.
+        Does NOT send a model call; only checks flags, keys and dumb network.
+        """
+        out: Dict[str, Any] = {"ready": True, "issues": [], "provider": None, "api_base": None}
+
+        # 0) basic flags/env
+        enabled = str(os.getenv("LLM_ENABLED", "1")).lower() not in ("0","false","no","off")
+        out["enabled"] = enabled
+        if not enabled:
+            out["ready"] = False
+            out["issues"].append("LLM_DISABLED")
+
+        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        out["provider"] = provider
+
+        # 1) keys
+        has_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+        out["has_key"] = has_key
+        if not has_key and provider in ("openai","anthropic"):
+            out["ready"] = False
+            out["issues"].append("MISSING_API_KEY")
+
+        # 2) api base + trivial network dial
+        api_base = os.getenv("LLM_API_BASE") or ("https://api.openai.com" if provider=="openai" else None)
+        out["api_base"] = api_base
+        net_ok = True
+        if api_base:
+            try:
+                host = urlparse(api_base).hostname or api_base.split("://",1)[-1]
+                socket.gethostbyname(host)           # DNS
+                with socket.create_connection((host, 443), timeout=1.0):
+                    pass
+            except Exception:
+                net_ok = False
+        out["network_ok"] = net_ok
+        if not net_ok:
+            out["ready"] = False
+            out["issues"].append("NETWORK_BLOCKED_OR_DNS_FAIL")
+
+        # 3) model configured?
+        model = self.oa_chat_model if _HAS_OPENAI else (self.claude_model if _HAS_ANTHROPIC else "local")
+        out["model"] = model
+
+        return out
+
+
 
     # -------------------------------- Public API --------------------------------------------
     def chat(
