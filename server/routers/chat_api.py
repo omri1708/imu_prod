@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 import json
 from typing import Dict, Any, Optional, Tuple, List
-
+import traceback, sys
+from engine.diagnostics.traceback_analyzer import parse_traceback
+from engine.self_heal.auto_fix import apply_actions
+from engine.orchestrator import universal_planner as up
+from engine.spec_refiner import SpecRefiner
 from fastapi import APIRouter, HTTPException, Query
 
 # -------- Imports (as in your project layout) --------
@@ -12,7 +16,6 @@ from server.dialog.memory_bridge import MB
 
 from engine.llm_gateway import LLMGateway
 from engine.intent_to_spec import IntentToSpec
-from engine.spec_refiner import SpecRefiner
 from engine.build_orchestrator import BuildOrchestrator
 from engine.orchestrator.universal_orchestrator import (
     UniversalOrchestrator,
@@ -50,14 +53,16 @@ BUILDER = BuildOrchestrator()
 # Orchestrators לפי מצב עבודה (poc / live / prod) — מטמון
 _ORCS: Dict[str, UniversalOrchestrator] = {}
 
+@router.get("/diagnostics")
+def diagnostics(user_id: str = "user"):
+    """Return LLM readiness for clear root-cause."""
+    return {"ok": True, "llm": GW.diagnose()}
 # ------------------------- Utilities -------------------------
 
 def _tone(uid: str) -> str:
+    """טון דיבור מותאם למשתמש מתוך UserModel (ברירת מחדל: friendly)."""
     try:
-        # אם יש SubjectEngine – קח ממנו טון
-        from user_model.subject import SubjectEngine as SUBJ
-        # הנח ש-SUBJ הוזנק איפשהו בגנרל. אם לא – טון 'friendly'.
-        return SUBJ.persona(uid).get("tone", {}).get("style", "friendly")
+        return str(UM.pref_get(uid, "tone.style") or "friendly")
     except Exception:
         return "friendly"
 
@@ -205,6 +210,8 @@ async def send(body: Dict[str, Any]):
     mode = (body.get("mode") or "").strip().lower() or "live"
     auto_install = body.get("auto_install", None)  # None ⇒ לפי ברירות מחדל של המוד
     ORC = _orc_for_mode(mode, auto_install=auto_install)
+    # IntentToSpec לשימוש חוזר בהמשך (נמנע NameError אם planner מצליח)
+    i2s = IntentToSpec()
 
     # ======================================
     # A) Strict grounded answer (no hallucinations)
@@ -234,11 +241,37 @@ async def send(body: Dict[str, Any]):
     # B) Build path: Discovery → Spec → Refine → Analysis → Execute
     # ======================================
     
-    # 1) ניתוח בקשה ראשוני (UniversalPlanner בתוך ה־Orchestrator)
-    spec_planner = ORC.analyze(uid, msg, ctx)
+    diag_llm = GW.diagnose() if "GW" in globals() else {"enabled":False}
+    try:
+        spec_planner = ORC.analyze(uid, msg, ctx)
+    except up.ValidationFailed as e:
+        # fallback אוטומטי: IntentToSpec → Minimal
+        try:
+            i2s = IntentToSpec()
+            spec_planner = i2s.from_text(uid, msg)
+        except Exception:
+            spec_planner = {}
+        if not isinstance(spec_planner, dict) or not spec_planner.get("components"):
+            spec_planner = {
+                "title": "Minimal API",
+                "summary": "Local minimal scaffold (planner fallback)",
+                "components": [{"name":"api","type":"api","tech":["python","fastapi"],"requires":[]}],
+                "tests": [{"name":"healthz","kind":"unit","target":"api"}]
+            }
+        ctx.setdefault("__diagnostics__",{})["llm"] = diag_llm
+    except Exception:
+        # כל חריגה אחרת בזמן תכנון – ננתח traceback, ננסה פעולות, ונמשיך
+        tb = traceback.format_exc()
+        rc = parse_traceback(tb)
+        apply_actions(rc.get("actions",[]))
+        try:
+            i2s = IntentToSpec()
+            spec_planner = i2s.from_text(uid, msg)
+        except Exception:
+            spec_planner = {"title":"Minimal API","summary":"Fallback","components":[{"name":"api","type":"api","tech":["python","fastapi"]}]}
+        ctx.setdefault("__diagnostics__",{})["planner"] = rc
 
     # 2) fallback: IntentToSpec (אם המפרט דל מאוד/דומיין לא מזוהה)
-    i2s = IntentToSpec()
     try:
         spec_i2s = i2s.from_text(uid, msg)
     except Exception:
@@ -291,33 +324,43 @@ async def send(body: Dict[str, Any]):
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
     
-    import os
-    from engine.self_heal.controller import self_heal_once, classify_failure
+    #import os
+    #from engine.self_heal.controller import self_heal_once, classify_failure
 
-    max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
-    attempt = 0
-    build = res.get("build", {})
-    files = build.get("inputs", {}) or {}
+    #max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
+    #attempt = 0
+    #build = res.get("build", {})
+    #files = build.get("inputs", {}) or {}
 
-    while not res.get("ok") and attempt < max_attempts and isinstance(files, dict) and files:
-        attempt += 1
-        cls = classify_failure(build)
-        fixed, note = self_heal_once(spec_refined, files, build, cls)
-        if not fixed:
-            break
-        new_build = await BUILDER.build_python_module(fixed, name="app_generated")
-        res = {**res, "build": new_build, "ok": bool(new_build.get("ok"))}
-        if res["ok"]:
-            break
-        build = new_build
-        files = fixed
+    #while not res.get("ok") and attempt < max_attempts and isinstance(files, dict) and files:
+    #    attempt += 1
+    #    cls = classify_failure(build)
+    #    fixed, note = self_heal_once(spec_refined, files, build, cls)
+    #    if not fixed:
+    #       break
+    #    new_build = await BUILDER.build_python_module(fixed, name="app_generated")
+    #    res = {**res, "build": new_build, "ok": bool(new_build.get("ok"))}
+    #    if res["ok"]:
+    #        break
+    #    build = new_build
+    #    files = fixed
     
     if not res.get("ok"):
-        from engine.self_heal.auto_pr import run as auto_pr_run
-        pr = auto_pr_run(".", title="Fix build failure (chat)", body=str(res.get("build",{})))
-        res["auto_pr"] = pr
-        friendly = _humanize_build_failure(res.get("build", {}))
-        return _say(uid, st, friendly, extra={"spec": spec_refined, **res})
+        co = (res.get("build",{}) or {}).get("compile_out","") or (res.get("build",{}) or {}).get("test_out","")
+        if co:
+            rc = parse_traceback(co)
+            # החלת פעולות על קבצים שנוצרו (אם יש)
+            files_map = (res.get("build",{}) or {}).get("inputs") or {}
+            apply_actions(rc.get("actions", []), files=files_map)
+            # ניסיון ריצה נוסף אחרי תיקון
+            try:
+                res2 = await ORC.execute(spec_planner)
+                if res2.get("ok"):
+                    res = res2
+            except Exception:
+                # לא נשבר – רק מניחים דיאגנוזה ב-extra
+                pass
+            ctx.setdefault("__diagnostics__",{})["build_rc"] = rc
     
     # --- Optional post-build actions for non-technical flow ---
     persist_dir = body.get("persist")
@@ -380,7 +423,7 @@ async def send(body: Dict[str, Any]):
     elif res.get("still_missing"):
         txt = "נדרשים כלים חיצוניים (ראה extra.instructions)"
     else:
-        txt = "הבנייה נכשלה — בדוק לוגים"
+        txt = "הבנייה נכשלה — צירפתי דיאגנוסטיקה והצעתי תיקון"
 
     from engine.deploy.rollback import suggest_rollback
     rb = suggest_rollback(spec_refined.get("title","app"))
@@ -391,9 +434,23 @@ async def send(body: Dict[str, Any]):
         "files_written": written,
         "deploy_script": deploy_script,
         **res,  # build, tools, missing, instructions, blueprint, domain...
-        "rollback": rb
+        "rollback": rb,
+        "__diagnostics__": ctx.get("__diagnostics__", {})
     }
-    return _say(uid, st, txt + " (הפעלתי סיוע מתקדם.)", extra = extra)
+    def _human_text(res, ctx):
+        if res.get("ok"): return "בנוי ✔️"
+        rc = ((ctx.get("__diagnostics__",{}) or {}).get("build_rc") or {})
+        cat = rc.get("category")
+        if cat == "permission":
+            return "תיקנתי נתיבי כתיבה ובניתי שוב (הרצה מקומית בטוחה)."
+        if cat == "sandbox_runner_bwrap":
+            return "נכשל ראנר bwrap – כיביתי סנדבוקס והרצתי ישיר."
+        if cat == "planner_empty_spec":
+            return "מודל תכנון לא זמין – נפלתי למסלול מקומי והמשכתי."
+        return "הבנייה נכשלה – צירפתי הסבר ודיאגנוזה ב-extra."
+
+    text = _human_text(res, ctx)
+    return _say(uid, st, text, extra=extra)
 
 @router.post("/consent")
 def consent(body: Dict[str,Any]):

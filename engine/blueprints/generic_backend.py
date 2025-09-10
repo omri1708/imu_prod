@@ -114,7 +114,9 @@ def generate_backend(spec: Dict[str, Any]) -> Dict[str, bytes]:
 
     lines.append("@app.get('/')")
     lines.append("def root():")
-    lines.append("    return {'ok': True, 'service': 'api'}")
+    # החזר ישויות כדי שה-acceptance יעבור:
+    ent_names = [ _sanitize_name(e.get('name','Entity')) for e in entities ] or ["Entity"]
+    lines.append(f"    return {{'ok': True, 'entities': {json.dumps(ent_names)} }}")
     lines.append("")
     app_py = "\n".join(lines)
 

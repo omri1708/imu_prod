@@ -249,8 +249,13 @@ class BuildOrchestrator:
         rc2, out2s = 0, ""
         if run_tests and test_files:
             rc_chk, _ = await _sx(["python","-c","import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('pytest') else 42)"])
-            if rc_chk == 0:
-                cmd = ["python","-m","pytest","-q"] + (pytest_args or [])
+            if rc_chk == 0:               
+                pytest_target = "."
+                if any(p.startswith("services/api/tests") for p in test_files):
+                    pytest_target = "services/api/tests"
+                elif any(p.startswith("tests") for p in test_files):
+                    pytest_target = "tests"
+                cmd = ["python","-m","pytest","-q", pytest_target] + (pytest_args or [])
                 rc2, out2 = await _sx(cmd)
                 out2s = _decode(out2)
             else:
@@ -365,6 +370,15 @@ class BuildOrchestrator:
 
                 # 2) pytest (optional)
                 if run_tests and test_files:
+                    # יעד חכם לטסטים
+                    if os.path.isdir(os.path.join(td, "services", "api", "tests")):
+                        pytest_target = os.path.join("services", "api", "tests")
+                    elif os.path.isdir(os.path.join(td, "tests")):
+                        pytest_target = "tests"
+                    else:
+                        dirs = sorted(set(os.path.dirname(p) or "." for p in test_files))
+                        pytest_target = dirs[0] if len(dirs) == 1 else "."
+
                     chk = await asyncio.create_subprocess_exec(
                         "python", "-c",
                         "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('pytest') else 42)",
@@ -372,8 +386,10 @@ class BuildOrchestrator:
                     )
                     _o, _ = await chk.communicate()
                     if chk.returncode == 0:
-                        cmd = ["python","-m","pytest","-q", e2e_dir, "-k", e2e_kexpr] + (e2e_args or [])
-                        p2 = await asyncio.create_subprocess_exec(*cmd, cwd=td, stdout=PIPE, stderr=STDOUT, preexec_fn=preexec)
+                        p2 = await asyncio.create_subprocess_exec(
+                            "python", "-m", "pytest", "-q", pytest_target,
+                            cwd=td, stdout=PIPE, stderr=STDOUT, preexec_fn=preexec
+                        )
                         out2, _ = await asyncio.wait_for(p2.communicate(), timeout=timeout_s)
                         test_rc, test_out = p2.returncode, _decode(out2)
                     else:

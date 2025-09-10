@@ -1,13 +1,30 @@
+# services/api/db.py
 from __future__ import annotations
 import os, subprocess
 from typing import Tuple
+from urllib.parse import urlparse
 from sqlmodel import create_engine, Session
 
 def _db_url() -> str:
-    return os.getenv("DB_URL", "sqlite:///data/app.db")
+    # אם לא הוגדר DB_URL: ברירת-מחדל בטוחה לטסטים/לוקאל (in-memory)
+    # אם תרצה קובץ, הגדר: DB_URL=sqlite:///absolute/or/relative/path/to/app.db
+    return os.getenv("DB_URL", "sqlite:///:memory:")
+
+def _ensure_sqlite_dir(url: str) -> None:
+    # sqlite:///:memory:  → אין צורך בתיקייה
+    if url.strip().lower().startswith("sqlite") and ":memory:" not in url:
+        # פורק את הנתיב מה-URL
+        path = url.replace("sqlite:///", "", 1) if "sqlite:///" in url else url.replace("sqlite:", "", 1)
+        path = path.strip()
+        # אם הוא יחסי, נבנה ממנו נתיב מוחלט עבור התהליך הנוכחי
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+        dir_ = os.path.dirname(path) or "."
+        os.makedirs(dir_, exist_ok=True)
 
 def init_engine():
     url = _db_url()
+    _ensure_sqlite_dir(url)
     if url.startswith("sqlite"):
         return create_engine(url, echo=False, connect_args={"check_same_thread": False})
     return create_engine(url, echo=False)
