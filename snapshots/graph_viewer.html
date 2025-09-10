@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>Project Graph Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://unpkg.com/cytoscape@3.28.0/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/layout-base/layout-base.js"></script>
+  <script src="https://unpkg.com/cose-base/cose-base.js"></script>
+  <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;display:flex;flex-direction:column;height:100vh}
+    header{padding:12px 16px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border-bottom:1px solid #eee}
+    #controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    #cy{flex:1}
+    button,select,input[type="text"]{padding:8px 10px;border:1px solid #ddd;border-radius:10px;background:#fff}
+    button:hover{background:#f7f7f7}
+    .pill{border-radius:999px;padding:6px 10px;background:#fafafa;border:1px solid #eee}
+    .legend{display:flex;gap:12px;align-items:center;color:#666;font-size:12px}
+    .dot{width:10px;height:10px;border-radius:50%}
+    /* NEW: excluded bar */
+    #excludedBar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    .tag{display:inline-flex;align-items:center;gap:6px;background:#ffe9e9;border:1px solid #f1c3c3;border-radius:999px;padding:4px 8px;font-size:12px}
+    .tag button{border:none;background:transparent;cursor:pointer;font-weight:bold}
+  </style>
+</head>
+<body>
+  <header>
+    <div id="controls">
+      <input id="fileInput" type="file" accept=".json" />
+      <select id="modeSel" title="Layer">
+        <option value="folders">שכבה 1: תיקיות</option>
+        <option value="folder_files">שכבה 2: קבצי תיקייה</option>
+        <option value="single_file">שכבה 3: קובץ יחיד</option>
+      </select>
+      <select id="folderSel" class="pill" title="בחר תיקייה"></select>
+      <input id="fileSearch" type="text" placeholder="חפש קובץ/תיקייה..." size="22" />
+      <button id="centerBtn">Center & Layout</button>
+      <!-- NEW: buttons -->
+      <button id="hideFolderBtn" title="הסתר/מחק את התיקייה הנבחרת">Hide selected folder</button>
+      <button id="resetFiltersBtn" title="ניקוי כל ההסתרות">Reset filters</button>
+      <div class="legend">
+        <div class="dot" style="background:#4a90e2"></div> תיקייה
+        <div class="dot" style="background:#33b27b"></div> קובץ
+        <div class="dot" style="background:#e94e77"></div> קשת חוצת־תיקייה
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <div id="excludedBar"></div> <!-- NEW -->
+      <div id="meta" style="text-align:left;color:#666;font-size:12px"></div>
+    </div>
+  </header>
+
+  <div id="cy"></div>
+
+  <script>
+    cytoscape.use(cytoscapeFcose);
+    let cy, RAW = null, currentSelection = null;
+
+    const el = s => document.querySelector(s);
+    const fileInput = el('#fileInput');
+    const modeSel   = el('#modeSel');
+    const folderSel = el('#folderSel');
+    const fileSearch= el('#fileSearch');
+    const meta      = el('#meta');
+    const centerBtn = el('#centerBtn');
+    const hideFolderBtn   = el('#hideFolderBtn');   // NEW
+    const resetFiltersBtn = el('#resetFiltersBtn'); // NEW
+    const excludedBar     = el('#excludedBar');     // NEW
+
+    // NEW: Excluded folders set + persistence
+    const LS_KEY = 'graph_excluded_folders';
+    let EXCLUDED = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
+    function persistExcluded(){ localStorage.setItem(LS_KEY, JSON.stringify([...EXCLUDED])); }
+    function renderExcludedBar(){
+      excludedBar.innerHTML = '';
+      if(EXCLUDED.size === 0){
+        const span = document.createElement('span');
+        span.style.color = '#666'; span.style.fontSize='12px';
+        span.textContent = 'Excluded folders: none';
+        excludedBar.appendChild(span);
+        return;
+      }
+      const label = document.createElement('span');
+      label.style.fontSize='12px'; label.style.color='#444';
+      label.textContent = 'Excluded folders:';
+      excludedBar.appendChild(label);
+      [...EXCLUDED].sort().forEach(name=>{
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.innerHTML = `<span>${name || '.'}</span><button title="שחזור">×</button>`;
+        tag.querySelector('button').onclick = ()=>{
+          EXCLUDED.delete(name);
+          persistExcluded();
+          loadFoldersToSelect(buildIndex(filteredRAW()));
+          renderExcludedBar();
+          render();
+        };
+        excludedBar.appendChild(tag);
+      });
+    }
+
+    function byId(map, id){ return map.find(x => x.id === id); }
+
+    function buildIndex(data){
+      const idx = { folders:[], files:[], fileByFolder: {}, edges: data.edges };
+      for(const n of data.nodes){
+        if(n.type === 'folder'){
+          idx.folders.push(n);
+          idx.fileByFolder[n.name] = [];
+        } else if(n.type === 'file'){
+          idx.files.push(n);
+          if(!idx.fileByFolder[n.folder]) idx.fileByFolder[n.folder] = [];
+          idx.fileByFolder[n.folder].push(n);
+        }
+      }
+      return idx;
+    }
+
+    function setMeta(data){
+      if(!data?.meta) { meta.textContent = ''; return; }
+      const m = data.meta;
+      meta.textContent = `root: ${m.root} · folders: ${m.counts.folders} · files: ${m.counts.files} · edges: ${m.counts.file_edges + m.counts.folder_edges}`;
+    }
+
+    function loadFoldersToSelect(idx){
+      const prev = folderSel.value;
+      folderSel.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = ''; opt0.textContent = 'בחר תיקייה...';
+      folderSel.appendChild(opt0);
+      idx.folders
+        .filter(f => !EXCLUDED.has(f.name)) // NEW: hide excluded
+        .slice()
+        .sort((a,b)=> a.name.localeCompare(b.name))
+        .forEach(f=>{
+          const o = document.createElement('option');
+          o.value = f.name; o.textContent = f.name || '.';
+          folderSel.appendChild(o);
+        });
+      // שמור בחירה קיימת אם אפשר
+      if([...folderSel.options].some(o => o.value === prev)) folderSel.value = prev;
+    }
+
+    // NEW: filter RAW by excluded folders (remove folder nodes, their file nodes, and related edges)
+    function filteredRAW(){
+      if(!RAW) return null;
+      const nodes = RAW.nodes.filter(n=>{
+        if(n.type === 'folder') return !EXCLUDED.has(n.name);
+        if(n.type === 'file')   return !EXCLUDED.has(n.folder);
+        return true;
+      });
+      const keepIds = new Set(nodes.map(n=>n.id));
+      const edges = RAW.edges.filter(e=>{
+        const sOk = keepIds.has(e.source);
+        const tOk = keepIds.has(e.target);
+        return sOk && tOk;
+      });
+      // meta counts are now “logical”; no need to recompute precisely
+      return { nodes, edges, meta: RAW.meta };
+    }
+
+    function fcoseLayout(){
+      cy.layout({
+        name: 'fcose',
+        quality: 'default',
+        randomize: false,
+        nodeSeparation: 100,
+        idealEdgeLength: edge => edge.data('type') === 'folder_dep' ? 200 : 120,
+        nodeRepulsion: node => 4000 + (node.degree(false) * 200),
+        edgeElasticity: edge => edge.data('type') === 'folder_dep' ? 0.0008 : 0.002,
+        gravity: 0.25, gravityRangeCompound: 1.5, gravityCompound: 0.15,
+        animate: true, fit: true, padding: 30
+      }).run();
+    }
+
+    function styleSheet(){
+      return [
+        { selector: 'node[type="folder"]',
+          style: { 'background-color': '#4a90e2','label':'data(name)','color':'#fff','font-size':11,'text-valign':'center','text-halign':'center',
+                   'width': 'mapData(deg, 0, 30, 22, 60)','height':'mapData(deg, 0, 30, 22, 60)'}},
+        { selector: 'node[type="file"]',
+          style: { 'background-color': '#33b27b','label':'data(id)','color':'#fff','font-size':9,
+                   'width':'mapData(deg, 0, 30, 14, 38)','height':'mapData(deg, 0, 30, 14, 38)'}},
+        { selector:'edge', style:{'width':1.3,'curve-style':'straight','opacity':0.8,'line-color':'#bbb'}},
+        { selector:'edge[type="folder_dep"]', style:{'width':'mapData(weight, 1, 30, 1, 8)'}},
+        { selector:'edge[cross_folder = "true"]', style:{'line-color':'#e94e77','width':2}},
+        { selector:'.dim', style:{'opacity':0.15}},
+        { selector:'.highlight', style:{'border-width':4,'border-color':'#222'}}
+      ];
+    }
+
+    function makeCy(elems){
+      if(cy) cy.destroy();
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: elems,
+        style: styleSheet(),
+        wheelSensitivity: 0.2, minZoom: 0.1, maxZoom: 4
+      });
+      cy.nodes().forEach(n => n.data('deg', n.degree(false)));
+      fcoseLayout();
+
+      // NEW: context menu (right-click) on folder node → exclude
+      cy.on('cxttap', 'node[type="folder"]', (ev)=>{
+        const n = ev.target;
+        const name = n.data('name');
+        if(!name) return;
+        if(confirm(`Hide folder "${name}" ?`)){
+          EXCLUDED.add(name);
+          persistExcluded();
+          loadFoldersToSelect(buildIndex(filteredRAW()));
+          renderExcludedBar();
+          render();
+        }
+      });
+
+      // קליק רגיל: כמו קודם
+      cy.on('tap', 'node', (ev)=>{
+        const n = ev.target;
+        if(n.data('type') === 'folder'){
+          modeSel.value = 'folder_files';
+          folderSel.value = n.data('name');
+          currentSelection = n.id();
+          render();
+        } else {
+          modeSel.value = 'single_file';
+          currentSelection = n.id();
+          render();
+        }
+      });
+    }
+
+    function render(){
+      if(!RAW) return;
+      const DATA = filteredRAW();                   // NEW: use filtered view
+      const idx = buildIndex(DATA);
+      const mode = modeSel.value;
+
+      if(mode === 'folders'){
+        currentSelection = null;
+        const nodes = idx.folders.map(f => ({ data:{ id:f.id, name:f.name, type:'folder' }}));
+        const edges = DATA.edges
+          .filter(e => e.type === 'folder_dep')
+          .map(e => ({ data:{ id:`fe:${e.source}->${e.target}`, source:e.source, target:e.target, type:'folder_dep', weight:e.weight }}));
+        makeCy({ nodes, edges });
+      }
+      else if(mode === 'folder_files'){
+        const folder = folderSel.value;
+        if(!folder){
+          modeSel.value = 'folders';
+          return render();
+        }
+        currentSelection = `folder:${folder}`;
+        const files = (idx.fileByFolder[folder] || []);
+        const nodes = [
+          { data:{ id:`folder:${folder}`, name:folder, type:'folder' }},
+          ...files.map(f => ({ data:{ id:f.id, type:'file', folder:f.folder }}))
+        ];
+        const edges = DATA.edges
+          .filter(e => e.type === 'file_dep' && (byId(files, e.source) || byId(files, e.target)))
+          .map(e => ({ data:{ id:`e:${e.source}->${e.target}`, source:e.source, target:e.target, type:'file_dep', cross_folder:String(e.cross_folder) }}));
+        makeCy({ nodes, edges });
+        cy.edges('[cross_folder = "true"]').connectedNodes().addClass('highlight');
+      }
+      else if(mode === 'single_file'){
+        let fileId = currentSelection;
+        if(!fileId || fileId.startsWith('folder:')){
+          const q = fileSearch.value?.trim();
+          if(q){ fileId = q; }
+        }
+        const filesSet = new Set(), edgesSet = new Set();
+        DATA.edges.filter(e => e.type === 'file_dep').forEach(e=>{
+          if(e.source === fileId || e.target === fileId){
+            filesSet.add(e.source); filesSet.add(e.target);
+            edgesSet.add(`${e.source}->${e.target}`);
+          }
+        });
+        if(filesSet.size === 0){
+          alert('לקובץ אין קשרים, או שה־ID לא נמצא (יתכן שבתיקייה מוסתרת).');
+          modeSel.value = 'folders'; return render();
+        }
+        const nodes = Array.from(filesSet).map(fid => {
+          const n = DATA.nodes.find(n => n.id === fid);
+          return { data:{ id:fid, type:'file', folder:n.folder } };
+        });
+        const edges = Array.from(edgesSet).map(k => {
+          const [s,t] = k.split('->');
+          const e = DATA.edges.find(x => x.source === s && x.target === t);
+          return { data:{ id:`e:${k}`, source:s, target:t, type:'file_dep', cross_folder:String(e.cross_folder) } };
+        });
+        makeCy({ nodes, edges });
+        cy.nodes(`[id = "${fileId}"]`).addClass('highlight');
+        cy.edges('[cross_folder = "true"]').addClass('highlight');
+      }
+    }
+
+    // אירועים ו־UI
+    fileInput.addEventListener('change', async (ev)=>{
+      const f = ev.target.files?.[0]; if(!f) return;
+      const text = await f.text();
+      RAW = JSON.parse(text);
+      setMeta(RAW);
+      loadFoldersToSelect(buildIndex(filteredRAW())); // NEW
+      renderExcludedBar();                            // NEW
+      modeSel.value = 'folders';
+      render();
+    });
+
+    modeSel.addEventListener('change', render);
+    folderSel.addEventListener('change', render);
+    centerBtn.addEventListener('click', ()=>{
+      if(!cy) return;
+      if(currentSelection){
+        const n = cy.$id(currentSelection);
+        if(n) { cy.center(n); n.select(); }
+      }
+      fcoseLayout();
+    });
+    fileSearch.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){
+        const q = e.target.value.trim();
+        if(!q || !cy) return;
+        const n = cy.nodes().filter(x => x.data('id') === q || x.data('name') === q);
+        cy.elements().removeClass('highlight').addClass('dim');
+        if(n && n.length){
+          n.removeClass('dim').addClass('highlight');
+          cy.center(n); cy.fit(n, 100);
+        } else {
+          cy.elements().removeClass('dim');
+        }
+      }
+    });
+
+    // NEW: button actions
+    hideFolderBtn.addEventListener('click', ()=>{
+      const folder = folderSel.value;
+      if(!folder){ alert('בחר תיקייה לפני הסתרה.'); return; }
+      EXCLUDED.add(folder);
+      persistExcluded();
+      loadFoldersToSelect(buildIndex(filteredRAW()));
+      renderExcludedBar();
+      render();
+    });
+
+    resetFiltersBtn.addEventListener('click', ()=>{
+      if(EXCLUDED.size === 0) return;
+      if(!confirm('לנקות את כל ההסתרות?')) return;
+      EXCLUDED.clear();
+      persistExcluded();
+      loadFoldersToSelect(buildIndex(filteredRAW()));
+      renderExcludedBar();
+      render();
+    });
+
+    // אתחול בר עם מצב קיים מ-localStorage אם נטען דף בלי לבחור קובץ עדיין
+    renderExcludedBar();
+  </script>
+</body>
+</html>
