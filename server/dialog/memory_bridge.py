@@ -54,31 +54,38 @@ class MemoryBridge:
     def __init__(self):
         self.gw = LLMGateway()
 
-    # כתיבה/תצפית על הודעה
+
+    # observe_turn: קודם רידקציה, ואז כתיבה
     def observe_turn(self, uid:str, role:str, text:str):
         st = _load(uid)
-        text = _redact(text)
-        (st["t0"]).append({"ts": _now_ms(), "role": role, "text": text})
+        text = _redact(text)  # ← להזיז למעלה
+        st["t0"].append({
+            "ts": _now_ms(), "role": role, "text": text,
+            "scope":"t0", "ttl_s": 7*24*3600, "consent": True
+        })
         if len(st["t0"]) > T0_MAX_MSGS:
-            self._consolidate_t0_to_t1(uid, st)   # מסכם את החלק הישן לתוך T1
-            st["t0"] = st["t0"][-(T0_MAX_MSGS//2):]  # משאיר רק את המחצית החדשה
-        self._gc(st)                          # TTL/קיצוץ
+            self._consolidate_t0_to_t1(uid, st)
+            st["t0"] = st["t0"][-(T0_MAX_MSGS//2):]
+        self._gc(st)
         st["ts"] = _now_ms()
         _save(uid, st)
 
-    # החזרת קונטקסט רלוונטי ל־LLM (לא שופכים היסטוריה)
+    # pack_context: להשתמש ב-scope_filter
     def pack_context(self, uid:str, user_query:str) -> Dict[str,Any]:
         st = _load(uid)
-        recent = st["t0"][-8:]                 # T0: אחרונות
-        episodic = st["t1"][-3:]               # T1: סיכומים אחרונים
-        # T2: בחירת עובדות רלוונטיות (חיפוש טוקנים פשוט; אפשר להחליף באמבדינג)
+        recent = st["t0"][-8:]
+
+        episodic_all = st.get("t1") or []
+        episodic = [x for x in episodic_all if apply_ttl(x) and consent_ok(x) and scope_filter(x, {"t1"})][-3:]
+
         q = (user_query or "").lower()
         toks = set(re.findall(r"[A-Za-zא-ת0-9]{3,}", q))
-        def rel_score(fact:str)->int:
-            return sum(1 for tok in toks if tok.lower() in fact.lower())
-        facts_all = (st.get("t2") or [])
-        facts = sorted(facts_all, key=lambda f: rel_score(f.get("fact","")), reverse=True)[:10]
-        return {"t0_recent": recent, "t1_episodic": episodic, "t2_facts": facts}
+        def rel_score(fact:str)->int: return sum(1 for tok in toks if tok.lower() in fact.lower())
+        facts_all = [f for f in (st.get("t2") or []) if apply_ttl(f) and consent_ok(f) and scope_filter(f, {"t2"})]
+        facts_sorted = sorted(facts_all, key=lambda f: rel_score(f.get("fact","")), reverse=True)[:10]
+
+        return {"t0_recent": recent, "t1_episodic": episodic, "t2_facts": facts_sorted}
+
 
     # Summarization (T0 -> T1)
     def _consolidate_t0_to_t1(self, uid:str, st:Dict[str,Any]):
@@ -92,14 +99,19 @@ class MemoryBridge:
                                  prompt=f"סכם את ההודעות הבאות ותמצת עובדות יציבות לפרסונה. החזר JSON בלבד.\n{text_blob}",
                                  temperature=0.0)
         j = res["json"]
-        item = {"ts": _now_ms(), "summary": _redact(j.get("summary","")), "facts": []}
+        item = {"ts": _now_ms(), "summary": _redact(j.get("summary","")),
+                "facts": [], "scope":"t1", "ttl_s": TTL_DAYS_T1*24*3600, "consent": True}
         for f in j.get("facts") or []:
             f = _redact(f).strip()
             if not f:
                 continue
             h = _hash(f)
             if not any(x.get("hash")==h for x in (st.get("t2") or [])):
-                (st["t2"]).append({"ts": _now_ms(), "hash": h, "fact": f, "confidence": 0.7})
+                (st["t2"]).append({
+                    "ts": _now_ms(), "hash": h, "fact": f, "confidence": 0.7,
+                    "scope":"t2", "ttl_s": TTL_DAYS_T2*24*3600, "consent": True
+                })
+
             item["facts"].append(f)
         (st["t1"]).append(item)
         if len(st["t1"]) > T1_MAX_CHUNKS:

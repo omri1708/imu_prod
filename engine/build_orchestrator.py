@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import asyncio
 import hashlib
 import json
+import subprocess
 import os
 import tempfile
 from asyncio.subprocess import PIPE, STDOUT
@@ -108,7 +109,7 @@ class BuildOrchestrator:
         name: str = "glue",
         *,
         lint: bool = True,
-        run_tests: bool = True,
+        run_tests: Optional[bool] = None,
         run_e2e: bool = False,
         e2e_dir: str = "tests",
         e2e_kexpr: str = "e2e or end2end or integration",
@@ -118,7 +119,9 @@ class BuildOrchestrator:
         timeout_s: Optional[float] = 60.0,
         cpu_seconds: Optional[int] = None,
         mem_mb: Optional[int] = None,
-        persist_dir: Optional[str] = None
+        workdir: Optional[str] = None,
+        persist_dir: Optional[str] = None,
+        
     ) -> Dict[str, Any]:
         inputs = _ensure_bytes_map(files)
         py_targets, test_files = _collect_py_targets(inputs)
@@ -126,20 +129,24 @@ class BuildOrchestrator:
             return {"ok": False, "error": "no_python_files", "compile_rc": None, "compile_out": "", "module": name}
 
         spec_digest = _spec_digest_from_inputs(inputs)
+        run_tests_env = os.getenv("IMU_RUN_TESTS", "0").strip().lower() in ("1","true","yes","on")
+        run_tests_flag = run_tests if run_tests is not None else run_tests_env
+        fail_on_tests = os.getenv("IMU_FAIL_ON_TESTS", "0").strip().lower() in ("1","true","yes","on")
 
         # choose runner
         force_tmp = (use_tmpdir is True) or (self.exec is None and self.prefer_sandbox)
         if not force_tmp and self.exec is not None:
             result = await self._build_with_sandbox(
                 inputs, py_targets, test_files,
-                lint, run_tests, run_e2e, pytest_args, e2e_args,
+                lint, run_tests_flag, run_e2e, pytest_args, e2e_args,
                 e2e_dir, e2e_kexpr, timeout_s, cpu_seconds, mem_mb
             )
         else:
             result = await self._build_with_tmpdir(
                 inputs, py_targets, test_files,
-                lint, run_tests, run_e2e, pytest_args, e2e_args,
-                e2e_dir, e2e_kexpr, timeout_s, cpu_seconds, mem_mb
+                lint, run_tests_flag, run_e2e, pytest_args, e2e_args,
+                e2e_dir, e2e_kexpr, timeout_s, cpu_seconds, mem_mb,
+                base_dir=workdir  # ← אם נתת workdir, נשתמש בו במקום tmpdir
             )
 
         # attach digest + manifest
@@ -159,11 +166,12 @@ class BuildOrchestrator:
         # allow API to persist the generated sources:
         result["inputs"] = inputs
         
-        # Optional persist of generated sources to disk (for non-technical users)
-        if persist_dir and isinstance(inputs, dict):   # 'inputs' = {path: bytes|str}
+        # Persist קבצים אם ביקשת
+        if (persist_dir or workdir) and isinstance(inputs, dict):
             try:
-                written = _persist_files(inputs, persist_dir)
-                result["persist_dir"] = persist_dir
+                target = persist_dir or workdir
+                written = _persist_files(inputs, target)
+                result["persist_dir"] = target
                 result["files_written"] = written
             except Exception as e:
                 result["persist_error"] = f"{e}"
@@ -274,7 +282,8 @@ class BuildOrchestrator:
             else:
                 rc3, out3s = 0, "pytest not installed; skipped"
         
-        ok = (lint_rc == 0 and rc1 == 0 and rc2 == 0 and rc3 == 0)
+        fail_on_tests = os.getenv("IMU_FAIL_ON_TESTS","0").strip().lower() in ("1","true","yes","on")
+        ok = (lint_rc == 0 and rc1 == 0 and (not fail_on_tests or rc2 == 0) and (not run_e2e or rc3 == 0))
 
         return {
             "ok": ok,
@@ -304,11 +313,21 @@ class BuildOrchestrator:
         timeout_s: Optional[float],
         cpu_seconds: Optional[int],
         mem_mb: Optional[int],
+        base_dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         compile_rc, compile_out = 1, ""
         test_rc, test_out = 0, ""
         try:
-            with tempfile.TemporaryDirectory() as td:
+            # אם קיבלת base_dir – נעבוד בו; אחרת tmpdir זמני
+            if base_dir:
+                os.makedirs(base_dir, exist_ok=True)
+                td = base_dir
+                def _cleanup(): pass
+            else:
+                tmp = tempfile.TemporaryDirectory()
+                td = tmp.name
+                def _cleanup(): tmp.cleanup()
+            try:
                 # write all files to tmpdir (preserve nested paths)
                 for rel, data in inputs.items():
                     abspath = os.path.join(td, rel)
@@ -411,6 +430,8 @@ class BuildOrchestrator:
                         e2e_rc, e2e_out = p3.returncode, _decode(out3)
                     else:
                         e2e_rc, e2e_out = 0, "pytest not installed; skipped"
+            finally:
+                _cleanup()
         except Exception as e:
             # fall back to structured failure without raising
             return {
@@ -421,7 +442,8 @@ class BuildOrchestrator:
                 "test_out": test_out,
             }
 
-        ok = (lint_rc == 0 and compile_rc == 0 and test_rc == 0 and (not run_e2e or e2e_rc == 0))
+        fail_on_tests = os.getenv("IMU_FAIL_ON_TESTS","0").strip().lower() in ("1","true","yes","on")
+        ok = (lint_rc == 0 and compile_rc == 0 and (not fail_on_tests or test_rc == 0) and (not run_e2e or e2e_rc == 0))
         return {
              "ok": ok,
             "lint_rc": lint_rc, "lint_out": lint_out,

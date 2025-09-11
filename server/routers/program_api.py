@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from server.deps.evidence_gate import require_citations_or_silence
 # Pydantic v1 (תואם לדוקר)
 try:
     from pydantic import BaseModel, Field
@@ -15,7 +16,11 @@ except Exception as e:
     ProgramOrchestrator = None
     _orch_import_err = e
 
-router = APIRouter(prefix="/program", tags=["program"])
+router = APIRouter(
+     prefix="/program",
+     tags=["program"],
+     dependencies=[Depends(require_citations_or_silence)]
+)
 
 class Service(BaseModel):
     type: str = Field(..., description="e.g. python_web | python_app")

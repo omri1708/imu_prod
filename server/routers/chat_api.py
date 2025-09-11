@@ -5,7 +5,7 @@ import os
 import json
 from typing import Dict, Any, Optional, Tuple, List
 import traceback, sys
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 
 from engine.diagnostics.traceback_analyzer import parse_traceback
 from engine.self_heal.auto_fix import apply_actions
@@ -13,6 +13,7 @@ from engine.orchestrator import universal_planner as up
 from engine.spec_refiner import SpecRefiner
 from server.dialog.state import SessionState
 from server.dialog.memory_bridge import MB
+from server.deps.evidence_gate import require_citations_or_silence
 
 from engine.llm_gateway import LLMGateway
 from engine.intent_to_spec import IntentToSpec
@@ -36,7 +37,12 @@ CONS = ConsentStore(".imu/consents.json")
 #  Chat API Router — Conversation + Grounding + Build
 # =====================================================
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(
+     prefix="/chat",
+     tags=["chat"],
+     dependencies=[Depends(require_citations_or_silence)]
+ )
+
 US = UserStore("./assurance_store_users")
 UM = UserModel(US)
 
@@ -91,6 +97,35 @@ def _humanize_build_failure(uid: str, build: Dict[str, Any]) -> str:
         return lex["e2e"]
     return lex["stuck"]
 
+
+def _auto_assets(uid: str, spec: Dict[str,Any], ctx: Dict[str,Any], user_msg: str) -> List[Dict[str,Any]]:
+    """
+    מבקש מה-LLM להפיק assets (קבצים) מתוך הכוונה – ללא מקורות, JSON בלבד:
+    [{"path":"ui/chat.html","mime":"text/html","body":"..."}]
+    """
+    schema = json.dumps({"assets":[{"path":"string","mime":"string","body":"string"}]}, ensure_ascii=False)
+    prompt = (
+        "From the SPEC and user request, synthesize concrete files to implement the intent. "
+        "Return JSON with 'assets' only. Do NOT require external sources.\n"
+        f"USER:\n{user_msg}\nSPEC:\n{json.dumps(spec, ensure_ascii=False)}\nCONTEXT:\n{json.dumps(ctx, ensure_ascii=False)}\n"
+        "Rules: choose safe relative paths under the project (e.g., ui/*.html, services/api/adapters/*.py, docs/*.md). "
+        "Do not include '..' or absolute paths."
+    )
+    r = GW.structured(uid, task="render", intent="render_assets", schema_hint=schema, prompt=prompt,
+                      temperature=0.0, require_grounding=False)
+    data = r.get("json") or {}
+    assets = data.get("assets") or []
+    # סינון בטיחות: בלי יציאה מהעץ
+    good = []
+    for a in assets:
+        p = str(a.get("path") or "")
+        b = (a.get("body") or "")
+        if not p or not b: 
+            continue
+        if ".." in p or p.startswith(("/", "\\")): 
+            continue
+        good.append({"path":p, "mime":str(a.get("mime") or ""), "body":b})
+    return good
 
 def _say(uid: str, st: SessionState, text: str, extra: Optional[Dict[str, Any]] = None):
     """רישום תשובת assistant בזיכרון + החזרת JSON עקבי לקליינט."""
@@ -285,7 +320,12 @@ async def send(body: Dict[str, Any]):
     spec_refined = refiner.refine_if_needed(uid, spec_merged)
 
     # 4) חקירת דרישות/אילוצים/חלופות ו־trade-offs (Structured JSON)
+    
     analysis = _planning_assist(uid, spec_refined, ctx)
+    if body.get("autogen_assets"):
+        auto = _auto_assets(uid, spec_refined, ctx, msg)
+        if auto:
+            spec_refined["assets"] = (spec_refined.get("assets") or []) + auto
 
     # אם קיימות שאלות פתוחות והלקוח לא ביקש "proceed" — נעצור לשאלות ממוקדות
     open_q: List[str] = (spec_refined.get("open_questions") or []) + (analysis.get("open_questions") or [])
@@ -324,6 +364,23 @@ async def send(body: Dict[str, Any]):
 
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
+
+    miss = res.get("still_missing") or []
+    auto = bool(body.get("auto_install") or CONS.get_flag(uid, "auto_install"))
+    if miss and auto:
+        try:
+            # נסיון השגה/התקנה אוטומטית (אם tools/auto_install קיים אצלך)
+            from tools.auto_install import auto_install_missing
+            _ = await auto_install_missing(miss)
+            # נסה שוב בנייה אחרי התקנה
+            res = await ORC.execute(spec_refined)
+        except Exception:
+            pass
+    elif miss and not auto:
+        # שיח לא טכני: לבקש אישור ולהמשיך
+        return _say(uid, st,
+            "נדרש אישור להתקנה/חיבור של כלים חיצוניים כדי להמשיך.",
+            extra={"needs_approvals":{"tools":miss},"hint":"שלח /chat/consent עם auto_install=true"})
     
     #from engine.self_heal.controller import self_heal_once, classify_failure
 
@@ -361,6 +418,23 @@ async def send(body: Dict[str, Any]):
         res = await ORC.execute(spec_refined)                  # ← ריצה חוזרת
 
     ctx.setdefault("__diagnostics__",{}).setdefault("autopilot",{})["attempts"] = attempt
+
+    miss = res.get("still_missing") or []
+    auto = bool(body.get("auto_install") or CONS.get_flag(uid, "auto_install"))
+    if miss and auto:
+        try:
+            # נסיון השגה/התקנה אוטומטית (אם tools/auto_install קיים אצלך)
+            from tools.auto_install import auto_install_missing
+            _ = await auto_install_missing(miss)
+            # נסה שוב בנייה אחרי התקנה
+            res = await ORC.execute(spec_refined)
+        except Exception:
+            pass
+    elif miss and not auto:
+        # שיח לא טכני: לבקש אישור ולהמשיך
+        return _say(uid, st,
+            "נדרש אישור להתקנה/חיבור של כלים חיצוניים כדי להמשיך.",
+            extra={"needs_approvals":{"tools":miss},"hint":"שלח /chat/consent עם auto_install=true"})
 
     
     # --- Optional post-build actions for non-technical flow ---
@@ -471,7 +545,8 @@ async def send(body: Dict[str, Any]):
         "__diagnostics__": ctx.get("__diagnostics__", {})
     }
     def _human_text(res, ctx):
-        if res.get("ok"): return "בנוי ✔️"
+        if res.get("ok"):
+            return "בנוי ✔️"
         rc = ((ctx.get("__diagnostics__",{}) or {}).get("build_rc") or {})
         cat = rc.get("category")
         if cat == "permission":

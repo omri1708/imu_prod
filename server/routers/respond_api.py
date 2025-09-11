@@ -3,8 +3,14 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from assurance.respond_text import GroundedResponder
 from assurance.errors import RefusedNotGrounded, ResourceRequired, ValidationFailed
+from fastapi import Depends
+from server.deps.evidence_gate import require_citations_or_silence
 
-router = APIRouter(prefix="/respond", tags=["respond"])
+router = APIRouter(
+    prefix="/respond",
+    tags=["respond"],
+    dependencies=[Depends(require_citations_or_silence)]
+)
 gr = GroundedResponder("./assurance_store_text")
 
 class Source(BaseModel):

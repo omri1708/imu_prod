@@ -7,8 +7,17 @@ from engine.intent_to_spec import IntentToSpec
 from engine.spec_refiner import SpecRefiner
 from engine.blueprints.registry import resolve as resolve_blueprint
 from engine.build_orchestrator import BuildOrchestrator
+from fastapi import Depends
+from server.deps.evidence_gate import require_citations_or_silence
+from server.deps.sandbox import require_sandbox_ready
 
-router = APIRouter(prefix="/build", tags=["build"])
+router = APIRouter(
+     prefix="/build",
+     tags=["build"],
+     dependencies=[Depends(require_citations_or_silence),
+                   Depends(require_sandbox_ready)]
+)
+
 i2s = IntentToSpec()
 ref = SpecRefiner()
 bo  = BuildOrchestrator()

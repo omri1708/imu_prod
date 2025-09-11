@@ -7,6 +7,7 @@ import json
 from typing import Dict, Any, List, Optional, Callable, Tuple
 from engine.artifacts.registry import register as register_artifacts
 from engine.qa.spec_tests import gen_acceptance_tests
+from engine.blueprints.registry import get_blueprint
 """
 Universal Orchestrator — configurable for:
   1) Quick dev / POC (no environment dependencies)
@@ -303,7 +304,7 @@ class UniversalOrchestrator:
         )
 
     # ---------- Execute: generate files + build ----------
-    async def execute(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, spec: Dict[str, Any], *, workdir: Optional[str] = None) -> Dict[str, Any]:
         mode = self.config.mode
 
         # --- (A) Decide domain & tool needs
@@ -399,9 +400,12 @@ class UniversalOrchestrator:
                 files = {}
         files.setdefault("services/api/tests/test_acceptance_generated.py", gen_acceptance_tests(spec))
         try:
-            dg = register_artifacts(spec.get("title","app"), files)  # רישום ארטיפקטים גולמיים
-        except Exception:
-            dg = None
+            dg = register_artifacts(spec.get("title","app"), files, base_dir=workdir)  # אם הפונקציה תומכת
+        except TypeError:
+            try:
+                dg = register_artifacts(spec.get("title","app"), files)
+            except Exception:
+                dg = None
 
         if not files or not _has_python_sources(files):
             files = _builtin_python_web(spec)
@@ -410,7 +414,10 @@ class UniversalOrchestrator:
 
         # 4) build
         t0 = time.time()
-        build = await self.builder.build_python_module(files, name=(domain + "_glue"))
+        try:
+            build = await self.builder.build_python_module(files, name=(domain + "_glue"), workdir=workdir)  # חדש
+        except TypeError:
+            build = await self.builder.build_python_module(files, name=(domain + "_glue"))  # תאימות
         latency = int((time.time() - t0) * 1000)
         ok = bool(build.get("ok", False))
 
