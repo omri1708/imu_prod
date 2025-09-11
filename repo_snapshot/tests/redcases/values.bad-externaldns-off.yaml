@@ -1,0 +1,38 @@
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    ingress:
+      enabled: true
+      className: "nginx"
+      host: "app.yourcompany.com"
+      tls:
+        - hosts: [ "app.yourcompany.com" ]
+          secretName: "app-tls"
+
+externalDNS:
+  enabled: false   # gating.requireExternalDNSForIngress=true -> צריך להיכשל
+tests/redcases/values.bad-certmanager-no-email.yaml
+certManager:
+  enabled: true
+  installCRDs: true
+  email: ""        # נדרש ע"י gating
+  acme:
+    enabled: true
+    server: "https://acme-v02.api.letsencrypt.org/directory"
+    solver: http01
+
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    ingress:
+      enabled: true
+      className: "nginx"
+      host: "app.yourcompany.com"
+      tls:
+        - hosts: [ "app.yourcompany.com" ]
+          secretName: "app-tls"
+
+externalDNS:
+  enabled: true
+  provider: "cloudflare"
+  domainFilters: [ "yourcompany.com" ]

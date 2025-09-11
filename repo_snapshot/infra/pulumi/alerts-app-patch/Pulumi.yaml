@@ -1,0 +1,3 @@
+name: imu-alerts-app-patch
+runtime: nodejs
+description: Patch ArgoCD Application (umbrella-prod) with Alertmanager secrets as Helm parameters

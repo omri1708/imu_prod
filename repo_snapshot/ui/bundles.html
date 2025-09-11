@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Bundles</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+a.btn{color:#9fb7ff;text-decoration:none;border:1px solid #233259;border-radius:8px;padding:4px 8px}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Bundles</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">← back</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Create Bundle</h3>
+    <label>Name</label><input id="bname" value="bundle-1"/>
+    <label>Comment</label><input id="bcomment" value="demo bundle"/>
+    <div style="margin-top:8px"><button id="btn_create">Create</button></div>
+    <pre id="create_out"></pre>
+  </div>
+  <div class="card">
+    <h3>Bundles</h3>
+    <table id="tbl"><thead><tr><th>name</th><th>zip</th><th>envelope</th><th>actions</th></tr></thead><tbody></tbody></table>
+    <pre id="verify_out"></pre>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(path,method="GET",body=null){
+  const r=await fetch(path,{method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):null});
+  const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j;
+}
+async function list(){
+  const j=await api('/bundles/list');
+  const tb=$("#tbl tbody"); tb.innerHTML='';
+  (j.items||[]).forEach(it=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${it.name}</td><td>${it.zip}</td><td>${it.envelope||''}</td>
+    <td><a class="btn" href="/bundles/download?name=${encodeURIComponent(it.name)}">download</a>
+        <a class="btn" href="#" data-name="${it.name}" class="verify">verify</a></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('a.btn').forEach(a=>{
+    if(a.textContent==='verify'){
+      a.onclick=async (e)=>{
+        e.preventDefault();
+        const nm=a.getAttribute('data-name');
+        const j=await api('/bundles/verify','POST',{name:nm});
+        $("#verify_out").textContent = JSON.stringify(j,null,2);
+      };
+    }
+  });
+}
+$("#btn_create").onclick=async()=>{
+  const j=await api('/bundles/create','POST',{user_id:'demo-user',name:$("#bname").value,comment:$("#bcomment").value});
+  $("#create_out").textContent = JSON.stringify(j,null,2);
+  list();
+};
+list();
+</script>
+</body>
+</html>

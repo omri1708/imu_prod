@@ -1,0 +1,24 @@
+{
+  "title": "IMU API",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "API p95 latency (ms)",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"imu-api\"}[5m])) by (le)) * 1000" }
+      ],
+      "yaxes": [{"format":"ms"},{"format":"short"}]
+    },
+    {
+      "type": "graph",
+      "title": "API error rate (5xx %)",
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"imu-api\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"imu-api\"}[5m])) * 100" }
+      ],
+      "yaxes": [{"format":"percent"},{"format":"short"}]
+    }
+  ]
+}

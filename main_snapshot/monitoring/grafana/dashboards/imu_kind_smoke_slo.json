@@ -1,0 +1,24 @@
+{
+  "title": "IMU Kind-Smoke SLO",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Kind-Smoke last (pass=1/fail=0)",
+      "targets": [ { "expr": "last_over_time(imu_kind_smoke_pass[1h])" } ],
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "graph",
+      "title": "Kind-Smoke results over time",
+      "targets": [ { "expr": "imu_kind_smoke_pass" } ],
+      "legend": { "show": true }
+    },
+    {
+      "type": "graph",
+      "title": "Kind-Smoke duration (s)",
+      "targets": [ { "expr": "imu_kind_smoke_duration_seconds" } ]
+    }
+  ]
+}

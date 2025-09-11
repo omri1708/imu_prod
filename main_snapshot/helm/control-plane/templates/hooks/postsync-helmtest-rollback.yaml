@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cp.fullname" . }}-postsync-test
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: {{ include "cp.fullname" . }}-sa
+      restartPolicy: Never
+      containers:
+      - name: helm-test
+        # שים לב: צריך תמונה שיש בה גם helm וגם kubectl וגם curl
+        # לדוגמה: bitnami/kubectl + התקנת helm בסקריפט, או תמונה ייעודית משלך
+        image: alpine/helm:3.14.4
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: RELEASE
+          value: "{{ .Release.Name }}"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: GITHUB_REPO
+          value: "{{ .Values.github.repo | default "" }}"
+        - name: PUSH_URL
+          value: "{{ .Values.observability.pushgateway.url | default "" }}"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "cp.fullname" . }}-github
+              key: token
+              optional: true
+        - name: GITHUB_SHA
+          value: "{{ .Values.github.sha | default "" }}"  # אופציונלי: להזין ב-values אם יש
+        command: [ "sh", "-c" ]
+        args:
+          - |
+            set -euo pipefail
+            echo "[postsync] running helm test for $RELEASE in $NAMESPACE..."
+
+            # בד״כ צריך kubectl ו-curl. ודא שהם קיימים:
+            if ! command -v kubectl >/dev/null 2>&1; then echo "kubectl not found in image"; exit 2; fi
+            if ! command -v curl    >/dev/null 2>&1; then echo "curl not found in image"; exit 2; fi
+            if ! command -v helm    >/dev/null 2>&1; then echo "helm not found in image"; exit 2; fi
+
+            status="failure"
+            if helm test "$RELEASE" -n "$NAMESPACE"; then
+              echo "[postsync] helm test passed"
+              status="success"
+            else
+              echo "[postsync] helm test FAILED, attempting rollback..."
+
+              # TODO: חזרה לרוויזיה הקודמת (ללא jq):
+              # prev=$(helm history "$RELEASE" -n "$NAMESPACE" --max 2 | awk 'NR==3{print $1}')
+              # [ -n "${prev:-}" ] && helm rollback "$RELEASE" "$prev" -n "$NAMESPACE" || true
+              # כרגע נשאיר minimalistic:
+              helm rollback "$RELEASE" 1 -n "$NAMESPACE" || true
+            fi
+
+            # דיווח ל-GitHub (אם קיים טוקן ורפו)
+            if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
+              sha="${GITHUB_SHA:-HEAD}"
+              curl -sS -X POST \
+                   -H "Authorization: token $GITHUB_TOKEN" \
+                   -H "Accept: application/vnd.github+json" \
+                   "https://api.github.com/repos/${GITHUB_REPO}/statuses/${sha}" \
+                   -d "{\"state\":\"${status}\",\"context\":\"IMU/Helm-Test\",\"description\":\"helm test ${status}\"}" \
+                   >/dev/null || true
+            fi
+
+            # דיווח ל-Pushgateway (אם הוגדר)
+            if [ -n "${PUSH_URL:-}" ]; then
+              metric_val=0
+              [ "$status" = "success" ] && metric_val=1
+              cat <<EOF | curl -s --data-binary @- "$PUSH_URL/metrics/job/helmtest/release/$RELEASE"
+imu_helm_test_pass{release="$RELEASE",namespace="$NAMESPACE"} $metric_val
+EOF
+            fi
+
+            [ "$status" = "success" ]
+      # אופציונלי: מחיקה אוטומטית אחרי סיום
+      # עובד בקלאסטרים חדשים; התנהגות עשויה להשתנות לפי גירסת קוברנטיס
+      # ttlSecondsAfterFinished: 300

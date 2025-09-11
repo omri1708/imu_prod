@@ -1,0 +1,6 @@
+{
+  "kind": "storage.gcs.sync",
+  "templates": {
+    "any": "gsutil -m rsync -r {src} {dst}{opts_opt}"
+  }
+}

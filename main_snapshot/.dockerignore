@@ -1,0 +1,12 @@
+.git
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.imu/
+cas/
+dist/
+build/
+*.pyc
+*.pyo
+*.pyd
+*.log

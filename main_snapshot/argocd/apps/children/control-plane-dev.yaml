@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: imu-cp-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/imu_repo
+    targetRevision: main
+    path: helm/control-plane
+    helm:
+      valueFiles: [ values.yaml ]
+      parameters:
+        - name: namespace
+          value: dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

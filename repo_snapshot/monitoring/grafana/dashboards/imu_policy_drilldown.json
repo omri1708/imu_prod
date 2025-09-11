@@ -1,0 +1,29 @@
+{
+  "title": "IMU Policy Drill-down (Conftest/Loki)",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "logs",
+      "title": "Conftest logs",
+      "targets": [
+        {
+          "expr": "{job=\"umbrella-e2e\"}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Fails (last 1h)",
+      "targets": [
+        { "expr": "count_over_time({job=\"umbrella-e2e\",status=\"fail\"}[1h])" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    }
+  ]
+}

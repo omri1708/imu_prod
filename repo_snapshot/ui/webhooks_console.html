@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Webhooks Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px;margin-bottom:10px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+.progress{height:8px;background:#1a2240;border-radius:999px;overflow:hidden}
+.progress>div{height:100%;width:0%;background:linear-gradient(90deg,#4ea1ff,#7cf);transition:width .25s ease}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Webhooks Console</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Incoming Timeline (WFQ-WS)</h3>
+    <table id="tbl"><thead><tr><th>time</th><th>event</th></tr></thead><tbody></tbody></table>
+    <div class="progress"><div id="bar"></div></div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+function add(note){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td><td>${note}</td>`; $("#tbl tbody").prepend(tr); const rows=$("#tbl tbody").children; if(rows.length>400) rows[rows.length-1].remove(); }
+function setPct(p){ $("#bar").style.width=Math.max(0,Math.min(100,p))+'%'; }
+(function connect(){
+  const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=timeline`;
+  const ws=new WebSocket(url);
+  ws.onmessage=ev=>{ try{ const o=JSON.parse(ev.data); if(o.type==='progress'&&typeof o.pct==='number') setPct(o.pct); add(o.note||o.type||'evt'); }catch(e){} };
+  ws.onclose=()=>setTimeout(connect,1500);
+})();
+</script>
+</body>
+</html>

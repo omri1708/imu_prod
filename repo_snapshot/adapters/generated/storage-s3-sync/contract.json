@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "S3 Sync",
+  "type": "object",
+  "required": ["src", "dst"],
+  "properties": {
+    "src":     { "type": "string", "minLength": 1 },
+    "dst":     { "type": "string", "minLength": 1 },
+    "profile": { "type": "string" },
+    "region":  { "type": "string" },
+    "extra":   { "type": "string" }
+  },
+  "additionalProperties": false
+}

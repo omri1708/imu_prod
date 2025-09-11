@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <title>IMU Live Timeline</title>
+    <script type="module" src="/static/stream_timeline.js"></script>
+    <style>
+      body{font:14px/1.5 system-ui, sans-serif; margin:24px}
+      .progress{height:16px;background:#eee;border-radius:8px;overflow:hidden;margin-bottom:12px}
+      .progress>.bar{height:100%;background:#0b74de;color:#fff;text-align:center}
+      .timeline .evt{padding:4px 0;border-bottom:1px solid #eee}
+    </style>
+  </head>
+  <body>
+    <h1>Run Viewer</h1>
+    <div class="progress"><div data-progress class="bar" style="width:0%">0%</div></div>
+    <div class="timeline" data-timeline></div>
+    <script type="module">
+      import {StreamTimeline} from '/static/stream_timeline.js';
+      const params = new URLSearchParams(location.search);
+      const runId = params.get("run_id") || "demo";
+      new StreamTimeline(document.body, runId);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Runbook</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;align-items:center;gap:10px}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:10px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+.progress{height:8px;background:#1a2240;border-radius:999px;overflow:hidden}
+.progress > div{height:100%;width:0%;background:linear-gradient(90deg,#4ea1ff,#7cf);transition:width .25s ease}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Runbook</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">← back</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Unity → K8s</h3>
+    <label>Project dir</label><input id="u_dir" value="/path/to/UnityProject"/>
+    <label>Target</label><input id="u_tgt" value="Android"/>
+    <label>Namespace</label><input id="u_ns" value="default"/>
+    <label>Name</label><input id="u_name" value="unity-app"/>
+    <div style="margin-top:8px"><button id="btn_unity">Run</button></div>
+    <pre id="out_unity"></pre>
+  </div>
+
+  <div class="card">
+    <h3>Android</h3>
+    <label>App dir</label><input id="a_dir" value="/path/to/AndroidApp"/>
+    <div style="margin-top:8px"><button id="btn_android">Run</button></div>
+    <pre id="out_android"></pre>
+  </div>
+
+  <div class="card">
+    <h3>iOS</h3>
+    <label>.xcworkspace</label><input id="i_ws" value="/path/to/App.xcworkspace"/>
+    <label>Scheme</label><input id="i_scheme" value="App"/>
+    <label>Config</label><input id="i_cfg" value="Release"/>
+    <div style="margin-top:8px"><button id="btn_ios">Run</button></div>
+    <pre id="out_ios"></pre>
+  </div>
+
+  <div class="card">
+    <h3>CUDA</h3>
+    <label>kern.cu</label><input id="c_src" value="kern.cu"/>
+    <label>out</label><input id="c_out" value="kern"/>
+    <div style="margin-top:8px"><button id="btn_cuda">Run</button></div>
+    <pre id="out_cuda"></pre>
+  </div>
+
+  <div class="card" style="grid-column:1/3">
+    <h3>Timeline (WFQ)</h3>
+    <table id="tbl"><thead><tr><th>time</th><th>event</th></tr></thead><tbody></tbody></table>
+    <div class="progress"><div id="bar"></div></div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function post(path,body){ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); return await r.json(); }
+function row(note){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td><td>${note}</td>`; $("#tbl tbody").prepend(tr); }
+function setPct(p){ $("#bar").style.width=Math.max(0,Math.min(100,p))+'%'; }
+
+$("#btn_unity").onclick=async()=>{
+  const req={user_id:"demo-user",project_dir:$("#u_dir").value,target:$("#u_tgt").value,namespace:$("#u_ns").value,name:$("#u_name").value};
+  const j=await post('/runbook/unity_k8s', req); $("#out_unity").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_android").onclick=async()=>{
+  const req={user_id:"demo-user",app_dir:$("#a_dir").value}; const j=await post('/runbook/android', req); $("#out_android").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_ios").onclick=async()=>{
+  const req={user_id:"demo-user",workspace:$("#i_ws").value,scheme:$("#i_scheme").value,config:$("#i_cfg").value};
+  const j=await post('/runbook/ios', req); $("#out_ios").textContent=JSON.stringify(j,null,2);
+};
+$("#btn_cuda").onclick=async()=>{
+  const req={user_id:"demo-user",src:$("#c_src").value,out:$("#c_out").value}; const j=await post('/runbook/cuda', req); $("#out_cuda").textContent=JSON.stringify(j,null,2);
+};
+
+// WFQ WS
+(function connect(){
+  const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=timeline`;
+  const ws = new WebSocket(url);
+  ws.onmessage = ev => {
+    try{
+      const o=JSON.parse(ev.data);
+      row(o.note||o.type||'evt');
+      if(o.type==='progress'&&typeof o.pct==='number'){ setPct(o.pct); }
+    }catch(e){}
+  };
+  ws.onclose=()=>setTimeout(connect,1500);
+})();
+</script>
+</body>
+</html>

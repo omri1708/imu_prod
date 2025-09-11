@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: prod
+  namespace: argocd
+spec:
+  description: IMU Prod Project
+  sourceRepos:
+    - https://github.com/your-org/imu_repo
+    - https://prometheus-community.github.io/helm-charts
+    - https://open-policy-agent.github.io/gatekeeper/charts
+  destinations:
+    - namespace: prod
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"

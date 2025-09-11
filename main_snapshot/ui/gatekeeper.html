@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Gatekeeper</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:420px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button,textarea{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+textarea{width:100%;height:180px;font-family:ui-monospace,menlo,consolas,monospace}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Gatekeeper</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Inputs</h3>
+    <label>Evidence digests (one per line, min_trust=0.7)</label>
+    <textarea id="evi">deadbeef... (sha256) </textarea>
+    <h4>GitHub Checks</h4>
+    <label>Owner</label><input id="owner" value="org"/>
+    <label>Repo</label><input id="repo" value="repo"/>
+    <label>Ref (sha) or PR#</label><input id="ref" placeholder="sha"/><input id="pr" placeholder="pr#"/>
+    <label>Required checks (comma)</label><input id="req" value="build,tests"/>
+    <label>Mode</label><select id="mode"><option>all</option><option>any</option></select>
+    <h4>p95</h4>
+    <label>Keys (comma)</label><input id="pkeys" value="adapters.run:unity.build"/>
+    <label>Ceiling (ms)</label><input id="pceil" value="5000"/>
+    <div style="margin-top:8px"><button id="btn_eval">Evaluate</button></div>
+  </div>
+  <div class="card">
+    <h3>Result</h3>
+    <pre id="out"></pre>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(p,b){ const r=await fetch(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j; }
+$("#btn_eval").onclick=async()=>{
+  const evid = ($("#evi").value||"").split("\n").map(s=>s.trim()).filter(Boolean).map(d=>({digest:d,min_trust:0.7}));
+  const owner=$("#owner").value, repo=$("#repo").value, ref=$("#ref").value, pr=$("#pr").value;
+  const reqs=($("#req").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+  const checks = (owner && repo && (ref || pr)) ? {owner,repo,ref:ref||null,pr_number: pr?parseInt(pr):null,required:reqs,mode:$("#mode").value} : null;
+  const p95  = ($("#pkeys").value||"").split(",").filter(Boolean).length ? {keys: $("#pkeys").value.split(",").map(s=>s.trim()), ceiling_ms: parseInt($("#pceil").value)} : null;
+  const j=await api('/gatekeeper/evaluate',{evidences:evid,checks, p95});
+  $("#out").textContent = JSON.stringify(j,null,2);
+};
+</script>
+</body>
+</html>

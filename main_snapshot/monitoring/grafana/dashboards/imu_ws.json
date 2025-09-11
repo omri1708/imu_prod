@@ -1,0 +1,21 @@
+{
+  "title": "IMU WS (WFQ)",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "WS connections",
+      "targets": [
+        { "expr": "sum(imu_ws_connections)" }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "WFQ queue size (timeline)",
+      "targets": [
+        { "expr": "avg(imu_wfq_queue_size{topic=\"timeline\"})" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "title": "IMU SLO Dashboard",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "helm test pass (last)",
+      "targets": [ { "expr": "last_over_time(imu_helm_test_pass[1h])" } ],
+      "options": { "reduceOptions": { "calcs": ["last"] }, "colorMode":"value" }
+    },
+    {
+      "type": "stat",
+      "title": "k6 pass (last)",
+      "targets": [ { "expr": "last_over_time(imu_k6_pass[1h])" } ],
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "graph",
+      "title": "API p95 latency (ms)",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"imu-api\"}[5m])) by (le)) * 1000" }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Gatekeeper denies (rate5m)",
+      "targets": [ { "expr": "sum(rate(gatekeeper_violations{enforcement_action=\"deny\"}[5m]))" } ]
+    },
+    {
+      "type": "graph",
+      "title": "Unexpected diffs (CI)",
+      "targets": [ { "expr": "imu_allowed_diffs_unexpected_total" } ]
+    }
+  ]
+}

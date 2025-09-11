@@ -1,0 +1,15 @@
+services:
+  api:
+    environment:
+      IMU_ROOT: /data/provenance           # גם הקוד הישן שמחפש IMU_ROOT יקבל כאן
+      IMU_PROV_ROOT: /data/provenance      # הקוד החדש (LLMGateway וכו')
+      IMU_DATA_ROOT: /data/runs            # sitecustomize יכוון לפה
+      IMU_SANDBOX: "0"
+      IMU_BUILD_SANDBOX: "none"
+    volumes:
+      - runs:/data/runs
+      - prov:/data/provenance
+
+volumes:
+  runs: {}
+  prov: {}

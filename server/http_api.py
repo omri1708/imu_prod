@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
+from fastapi.middleware.cors import CORSMiddleware
 from security.network_policies import is_allowed, POLICY_DB
 from security.filesystem_policies import is_path_allowed, cleanup_ttl, FS_DB
 from adapters.mappings import WINGET, BREW, APT, CLI_TEMPLATES
@@ -36,7 +36,7 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         pass
 from policy.policy_hotload import start_watcher
 start_watcher("security/policy_rules.yaml", interval_s=2.0)
-
+APP.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 from server.provenance_api import router as prov_router
 from server.metrics_api import router as metrics_router
 from server.supplychain_api import router as supply_router
@@ -75,6 +75,7 @@ from server.routers.adapters_secure import router as adapters_secure_router
 from server.routers.chat_api import router as chat_router
 from server.routers.program_api import router as program_router
 from server.routers.orchestrate_api import router as orchestrate_router
+from server.routers import user_memory_api
 
 _synth_reload()
 
@@ -116,15 +117,18 @@ APP.include_router(supply_router)
 APP.include_router(events_router)
 APP.include_router(sc_index_router)
 APP.include_router(runbook_router)
+APP.include_router(user_memory_api.router)
 
 # ----------- helper---------
 def _resolve_template(kind: str, fam: str) -> str | None:
     # dynamic first, fallback to builtin
     t = dyn_get_template(kind, fam)
-    if t: return t
+    if t:
+        return t
     from adapters.mappings import CLI_TEMPLATES as BUILTIN
     tm = BUILTIN.get(kind)
-    if not tm: return None
+    if not tm:
+        return None
     return tm.get(fam) or tm.get("any")
 
 def _validate_contract_if_exists(kind: str, params: Dict[str,Any]):

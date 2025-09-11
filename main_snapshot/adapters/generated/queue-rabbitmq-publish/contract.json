@@ -1,0 +1,18 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"RabbitMQ Publish (rabbitmqadmin)",
+  "type":"object",
+  "required":["host","port","exchange","routing_key","payload"],
+  "properties":{
+    "host":{"type":"string","minLength":1},
+    "port":{"type":"integer","minimum":1,"maximum":65535},
+    "exchange":{"type":"string","minLength":1},
+    "routing_key":{"type":"string","minLength":1},
+    "payload":{"type":"string","minLength":1},
+    "user_opt":{"type":"string","default":""},
+    "pass_opt":{"type":"string","default":""},
+    "vhost_opt":{"type":"string","default":""},
+    "props_opt":{"type":"string","default":""}
+  },
+  "additionalProperties": false
+}

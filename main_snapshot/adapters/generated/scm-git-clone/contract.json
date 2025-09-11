@@ -1,0 +1,14 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"Git Clone",
+  "type":"object",
+  "required":["repo","dest"],
+  "properties":{
+    "repo":{"type":"string","minLength":3},
+    "dest":{"type":"string","minLength":1},
+    "branch_opt":{"type":"string","default":""},
+    "depth_opt":{"type":"string","default":""}
+  },
+  "additionalProperties": false
+}
+

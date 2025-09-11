@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: imu-umbrella-prod
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: |
+      api=ghcr.io/your-org/imu-api:~stable
+      ,ws=ghcr.io/your-org/imu-ws:~stable
+      ,ui=ghcr.io/your-org/imu-ui:~stable
+    argocd-image-updater.argoproj.io/update-strategy: latest
+    # Map image -> Helm values paths inside umbrella
+    argocd-image-updater.argoproj.io/helm.image-values.api: controlPlane.imu-control-plane.images.api.tag
+    argocd-image-updater.argoproj.io/helm.image-values.ws:  controlPlane.imu-control-plane.images.ws.tag
+    argocd-image-updater.argoproj.io/helm.image-values.ui:  controlPlane.imu-control-plane.images.ui.tag
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
+spec:
+  project: prod
+  source:
+    repoURL: https://github.com/your-org/imu_repo
+    targetRevision: main
+    path: helm/umbrella
+    helm:
+      valueFiles: [ values.yaml, values.prod.yaml ]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    retry:
+      limit: 2
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }

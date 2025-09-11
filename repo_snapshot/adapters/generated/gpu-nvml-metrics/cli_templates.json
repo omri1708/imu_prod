@@ -1,0 +1,6 @@
+{
+  "kind": "gpu.nvml.metrics",
+  "templates": {
+    "any": "nvidia-smi --query-gpu={query}{format_opt}"
+  }
+}

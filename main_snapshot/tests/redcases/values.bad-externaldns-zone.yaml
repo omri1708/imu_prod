@@ -1,0 +1,15 @@
+externalDNS:
+  enabled: true
+  provider: "cloudflare"
+  domainFilters: [ "yourcompany.com", "evil.com" ]  # zone לא מאושר
+
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    ingress:
+      enabled: true
+      className: "nginx"
+      host: "app.yourcompany.com"
+      tls:
+        - hosts: [ "app.yourcompany.com" ]
+          secretName: "app-tls"

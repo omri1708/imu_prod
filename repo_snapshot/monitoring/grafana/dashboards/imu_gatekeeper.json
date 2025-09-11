@@ -1,0 +1,40 @@
+{
+  "title": "IMU Gate Decisions (Gatekeeper)",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Violations (rate) by enforcement",
+      "targets": [
+        { "expr": "sum(rate(gatekeeper_violations[5m])) by (enforcement_action)" }
+      ],
+      "legend": { "show": true }
+    },
+    {
+      "type": "table",
+      "title": "Violations by Constraint",
+      "targets": [
+        { "expr": "sum by (constraint, enforcement_action) (gatekeeper_violations)" }
+      ],
+      "styles": [],
+      "transform": "table"
+    },
+    {
+      "type": "stat",
+      "title": "Audit last run (minutes ago)",
+      "targets": [
+        { "expr": "(time() - gatekeeper_audit_last_run_time)/60" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["last"] }, "colorMode":"value" }
+    },
+    {
+      "type": "graph",
+      "title": "Denied (agg rate)",
+      "targets": [
+        { "expr": "sum(rate(gatekeeper_violations{enforcement_action=\"deny\"}[5m]))" }
+      ],
+      "legend": { "show": false }
+    }
+  ]
+}

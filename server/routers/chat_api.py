@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import re
+import os 
 import json
 from typing import Dict, Any, Optional, Tuple, List
 import traceback, sys
+from fastapi import APIRouter, HTTPException, Query
+
 from engine.diagnostics.traceback_analyzer import parse_traceback
 from engine.self_heal.auto_fix import apply_actions
 from engine.orchestrator import universal_planner as up
 from engine.spec_refiner import SpecRefiner
-from fastapi import APIRouter, HTTPException, Query
-
-# -------- Imports (as in your project layout) --------
 from server.dialog.state import SessionState
 from server.dialog.memory_bridge import MB
 
@@ -29,6 +29,7 @@ from engine.runtime.approvals import required_approvals
 from engine.blueprints.registry import resolve as resolve_blueprint
 from pathlib import Path
 from engine.runtime.consent_store import ConsentStore
+
 CONS = ConsentStore(".imu/consents.json")
 
 # =====================================================
@@ -141,11 +142,7 @@ def _merge_specs(primary: Dict[str, Any], aux: Dict[str, Any]) -> Dict[str, Any]
     out["__provenance__"].update({"intent_to_spec": bool(aux)})
     return out
 
-def _planning_assist(uid: str, spec: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    עוזר תכנון מובנה (JSON בלבד): דרישות, אילוצים, trade-offs, חלופות ארכיטקטורה,
-    IaC/CI-CD, ניטור, סיכונים ושאלות פתוחות. מבוסס LLMGateway.structured.
-    """
+def _planning_assist(uid: str, spec: Dict[str,Any], ctx: Dict[str,Any]) -> Dict[str, Any]:
     schema = json.dumps({
         "requirements": {"explicit": ["string"], "implicit": ["string"], "constraints": ["string"]},
         "tradeoffs": [{"option": "string", "pros": ["string"], "cons": ["string"], "when": ["string"], "risks": ["string"]}],
@@ -157,17 +154,18 @@ def _planning_assist(uid: str, spec: Dict[str, Any], ctx: Dict[str, Any]) -> Dic
         "unknowns": ["string"]
     }, ensure_ascii=False)
     prompt = (
-        "Analyze the following SPEC and user context. Return JSON ONLY, per schema.\n"
-        "Be concrete and implementation-ready (no templates). Keep lists concise but complete.\n"
+        "Design the system from this SPEC and context. JSON ONLY per schema. "
+        "IMPORTANT: no external sources are required for design; produce a concrete, testable design.\n"
         f"SPEC:\n{json.dumps(spec, ensure_ascii=False)}\n"
         f"CONTEXT:\n{json.dumps(ctx, ensure_ascii=False)}"
     )
     res = GW.structured(
         user_id=uid, task="planning", intent="build_architecture",
-        schema_hint=schema, prompt=prompt, temperature=0.1
+        schema_hint=schema, prompt=prompt, temperature=0.1,
+        require_grounding=False     # ← מונע נעילה על not_grounded בשלב תכנון
     )
-
     return res.get("json") or {}
+
 
 # -------------------------- Public Endpoints --------------------------
 
@@ -204,7 +202,10 @@ async def send(body: Dict[str, Any]):
 
     # ריכוז קונטקסט מרלוונטי (T0/T1/T2) + פרסונה
     ctx = MB.pack_context(uid, msg)
-    ctx.update(_persona_for_context(uid))
+    ignore_persona = bool(body.get("ignore_persona"))
+    if not ignore_persona:
+        ctx.update(_persona_for_context(uid))
+
 
     # בחירת מצב Orchestrator לפי הבקשה (או ברירת מחדל 'live')
     mode = (body.get("mode") or "").strip().lower() or "live"
@@ -324,7 +325,6 @@ async def send(body: Dict[str, Any]):
     # 5) Execute: בנייה אמיתית (כולל lint/compile/pytest אם יש)
     res = await ORC.execute(spec_refined)
     
-    #import os
     #from engine.self_heal.controller import self_heal_once, classify_failure
 
     #max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
@@ -345,22 +345,23 @@ async def send(body: Dict[str, Any]):
     #    build = new_build
     #    files = fixed
     
-    if not res.get("ok"):
+    # --- Autopilot: ריצה → דיאגנוזה → תיקון → ריצה חוזרת (עד N) ---
+    AUTOPILOT = True
+    max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
+    attempt = 0
+
+    while AUTOPILOT and not res.get("ok") and attempt < max_attempts:
+        attempt += 1
         co = (res.get("build",{}) or {}).get("compile_out","") or (res.get("build",{}) or {}).get("test_out","")
-        if co:
-            rc = parse_traceback(co)
-            # החלת פעולות על קבצים שנוצרו (אם יש)
-            files_map = (res.get("build",{}) or {}).get("inputs") or {}
-            apply_actions(rc.get("actions", []), files=files_map)
-            # ניסיון ריצה נוסף אחרי תיקון
-            try:
-                res2 = await ORC.execute(spec_planner)
-                if res2.get("ok"):
-                    res = res2
-            except Exception:
-                # לא נשבר – רק מניחים דיאגנוזה ב-extra
-                pass
-            ctx.setdefault("__diagnostics__",{})["build_rc"] = rc
+        if not co:
+            break
+        rc = parse_traceback(co)  # ← קורא traceback אמיתי (לא טקסט גנרי)
+        files_map = (res.get("build",{}) or {}).get("inputs") or {}
+        apply_actions(rc.get("actions", []), files=files_map)  # ← מחיל פעולות תיקון מדויקות
+        res = await ORC.execute(spec_refined)                  # ← ריצה חוזרת
+
+    ctx.setdefault("__diagnostics__",{}).setdefault("autopilot",{})["attempts"] = attempt
+
     
     # --- Optional post-build actions for non-technical flow ---
     persist_dir = body.get("persist")
@@ -381,6 +382,26 @@ async def send(body: Dict[str, Any]):
                 data = data.encode("utf-8")
             p.write_bytes(data)
             written.append(str(p))
+    
+    # --- Asset Renderer: כתיבת תוצרים כלליים אם ה-Spec כולל 'assets' ---
+    assets = (spec_refined.get("assets") or [])
+    if persist_dir and isinstance(assets, list):
+        for a in assets:
+            try:
+                rel = str(a.get("path") or "").strip()
+                body_txt = str(a.get("body") or "")
+                if not rel or not body_txt: 
+                    continue
+                # בטיחות: אל תאפשר יציאה מהעץ
+                if ".." in rel or rel.startswith(("/", "\\")):
+                    continue
+                p = Path(persist_dir) / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(body_txt.encode("utf-8"))
+                written.append(str(p))
+            except Exception:
+                pass
+
 
     # 2) Emit CI workflow
     if emit_ci:
@@ -408,8 +429,20 @@ async def send(body: Dict[str, Any]):
                 p.write_bytes(data if isinstance(data, (bytes, bytearray)) else str(data).encode())
         except Exception:
             pass
-
-    # 5) Autodeploy (safe: return script; not executed unless explicitly allowed)
+    
+    emit_list = body.get("emit") or []  # למשל ["ui.chat_console"]
+    if isinstance(emit_list, list):
+        for bp_name in emit_list:
+            try:
+                bp_files = resolve_blueprint(str(bp_name))(spec_refined)
+                for rel, data in bp_files.items():
+                    p = Path(persist_dir or ".") / rel
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(data if isinstance(data,(bytes,bytearray)) else str(data).encode())
+                    written.append(str(p))
+            except Exception:
+                pass
+        # 5) Autodeploy (safe: return script; not executed unless explicitly allowed)
     deploy_script = []
     if autodeploy:
         deploy_script = [
@@ -419,11 +452,11 @@ async def send(body: Dict[str, Any]):
     
     # 6) ניסוח מענה ידידותי למשתמש + החזרת מידע עשיר
     if res.get("ok"):
-        txt = "בנוי ✔️"
+        text = "בנוי ✔️"
     elif res.get("still_missing"):
-        txt = "נדרשים כלים חיצוניים (ראה extra.instructions)"
+        text = "נדרשים כלים חיצוניים (ראה extra.instructions)"
     else:
-        txt = "הבנייה נכשלה — צירפתי דיאגנוסטיקה והצעתי תיקון"
+        text = "הבנייה נכשלה — צירפתי דיאגנוסטיקה והצעתי תיקון"
 
     from engine.deploy.rollback import suggest_rollback
     rb = suggest_rollback(spec_refined.get("title","app"))
@@ -449,6 +482,25 @@ async def send(body: Dict[str, Any]):
             return "מודל תכנון לא זמין – נפלתי למסלול מקומי והמשכתי."
         return "הבנייה נכשלה – צירפתי הסבר ודיאגנוזה ב-extra."
 
+    # --- TrustOps KPI ---
+    try:
+        import time
+        import pathlib
+        kdir = pathlib.Path(".imu/trustops")
+        kdir.mkdir(parents=True, exist_ok=True)
+        b = res.get("build",{}) or {}
+        kpi = {
+            "ts": time.time(), "user": uid, "mode": mode,
+            "build_ok": bool(res.get("ok")),
+            "compile_rc": b.get("compile_rc"), "test_rc": b.get("test_rc"),
+            "blueprint": res.get("blueprint"), "domain": res.get("domain"),
+            "files_count": len(b.get("files_built") or []),
+            "note": "design is ungrounded by policy; knowledge remains grounded"
+        }
+        (kdir / f"run_{int(kpi['ts'])}.json").write_text(json.dumps(kpi, ensure_ascii=False, indent=2), "utf-8")
+    except Exception:
+        pass
+
     text = _human_text(res, ctx)
     return _say(uid, st, text, extra=extra)
 
@@ -472,3 +524,16 @@ def set_preferences(body: Dict[str,Any]):
     for k,v in tone.items():
         UM.pref_set(uid, f"tone.{k}", v, confidence=0.9)
     return {"ok": True}
+
+@router.post("/memory/reset")
+def deep_reset(body: Dict[str, Any]):
+    uid   = (body.get("user_id") or "user").strip()
+    level = (body.get("level") or "t0").lower()  # "t0" | "deep"
+    if level == "t0":
+        MB.reset_t0(uid)
+        SESS.pop(uid, None)
+        return {"ok": True, "cleared": ["t0"]}
+    # deep: מוחק פרופיל/פרסונה (t1/t2)
+    MB.wipe_user(uid)
+    SESS.pop(uid, None)
+    return {"ok": True, "cleared": ["t0","t1","t2"]}

@@ -1,0 +1,45 @@
+namespace: prod
+controlPlane:
+  enabled: true
+  imu-control-plane:
+    namespace: prod
+    # הפעל ערכי פרודקשן שבנית קודם
+    images:
+      api: { repository: ghcr.io/your-org/imu-api, tag: stable, pullPolicy: IfNotPresent }
+      ws:  { repository: ghcr.io/your-org/imu-ws,  tag: stable, pullPolicy: IfNotPresent }
+      ui:  { repository: ghcr.io/your-org/imu-ui,  tag: stable, pullPolicy: IfNotPresent }
+    replicas: { api: 3, ws: 2, ui: 2 }
+    hpa:
+      enabled: true
+      api: { min: 3, max: 10, cpu: 70 }
+      ws:  { min: 2, max: 10, cpu: 70 }
+    serviceMonitor:
+      enabled: true
+    networkPolicy:
+      enabled: true
+      profile: strict
+      allowSameNamespace: true
+      ingressCidrs: [ "10.0.0.0/8", "192.168.0.0/16" ]
+      egressCidrs: [ "0.0.0.0/0" ]
+    ingress:
+      enabled: true
+      className: "nginx"
+      hosts:
+        - host: imu.yourcompany.com
+          paths:
+            - path: /
+              service: ui
+              port: 80
+            - path: /ws
+              service: ws
+              port: 8766
+            - path: /api
+              service: api
+              port: 8000
+      tls:
+        - hosts: [ imu.yourcompany.com ]
+          secretName: imu-tls
+monitoring:
+  enabled: true
+gatekeeper:
+  enabled: true

@@ -1,0 +1,56 @@
+name: umbrella-kind-smoke
+on:
+  pull_request: { branches: [ "main" ] }
+  workflow_dispatch: {}
+
+jobs:
+  umbrella-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: azure/setup-helm@v4
+        with: { version: 'v3.14.4' }
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: imu
+          wait: true
+          wait_for_ready: true
+          node_image: kindest/node:v1.29.2
+      - uses: azure/setup-kubectl@v4
+        with: { version: 'v1.29.2' }
+
+      - name: Helm deps
+        run: |
+          helm dependency build helm/umbrella
+          helm dependency build helm/control-plane
+
+      - name: Smoke umbrella on Kind
+        env: { CLUSTER: imu, NS: dev, REL: umbrella }
+        run: |
+          chmod +x scripts/umbrella_smoke_kind_ci.sh
+          ./scripts/umbrella_smoke_kind_ci.sh
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get ns
+          kubectl -n dev get all
+          kubectl -n dev get events --sort-by=.lastTimestamp | tail -n 200
+
+      - name: Port-forward umbrella API & WS
+        if: always()
+        run: |
+          kubectl -n dev port-forward svc/umbrella-control-plane-imu-control-plane-svc 8000:8000 8766:8766 >/tmp/pf-umb.log 2>&1 &
+          echo $! > /tmp/pfumb.pid
+          sleep 3
+      - name: WS Synthetic (umbrella)
+        if: always()
+        run: |
+          python3 -m pip install websockets || true
+          chmod +x scripts/ws_synthetic_ci.py
+          API_BASE=http://127.0.0.1:8000 \
+          WS_URL=ws://127.0.0.1:8766/ws/wfq?topic=timeline \
+          ./scripts/ws_synthetic_ci.py
+        finally: |
+          kill $(cat /tmp/pfumb.pid) || true

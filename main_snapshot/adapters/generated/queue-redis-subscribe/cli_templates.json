@@ -1,0 +1,6 @@
+{
+  "kind": "queue.redis.subscribe",
+  "templates": {
+    "any": "redis-cli -h {host} -p {port}{auth_opt}{db_opt} SUBSCRIBE {channel}"
+  }
+}

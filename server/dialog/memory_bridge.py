@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, re, json, time, hashlib
 from typing import Dict, Any
 from engine.llm_gateway import LLMGateway
+from engine.privacy.memory_policy import apply_ttl, scope_filter, consent_ok
 
 ROOT = "./assurance_store_users"
 os.makedirs(ROOT, exist_ok=True)
@@ -117,6 +118,12 @@ class MemoryBridge:
         st = _load(uid)
         st["t0"] = []
         _save(uid, st)
+
+    def wipe_user(self, uid: str):
+        try:
+            os.remove(mem_path(uid))
+        except Exception:
+            pass
 
 # מופע יחיד לשימוש בצ'אט
 MB = MemoryBridge()

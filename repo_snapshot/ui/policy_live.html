@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Policy Live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:1fr 420px;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button,textarea{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+textarea{width:100%;height:60vh;font-family:ui-monospace,menlo,consolas,monospace}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Policy – Live</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>YAML</h3>
+    <textarea id="yml"></textarea>
+    <div style="margin-top:8px"><button id="btn_apply">Apply</button></div>
+    <pre id="apply_out"></pre>
+  </div>
+  <div class="card">
+    <h3>Evaluate</h3>
+    <div class="grid">
+      <div>
+        <label>User</label><input id="uid" value="demo-user"/>
+        <label>Host</label><input id="host" value="127.0.0.1"/>
+        <label>Port</label><input id="port" type="number" value="8000"/>
+        <div style="margin-top:8px"><button id="btn_eval_net">Eval Net</button></div>
+        <pre id="out_net"></pre>
+      </div>
+      <div>
+        <label>Path</label><input id="path" value="/mnt/data/imu_repo/var/demo-user/file.txt"/>
+        <label>Write?</label><select id="write"><option>false</option><option>true</option></select>
+        <div style="margin-top:8px"><button id="btn_eval_fs">Eval FS</button></div>
+        <pre id="out_fs"></pre>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(path,method="GET",body=null){
+  const r=await fetch(path,{method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):null});
+  const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j;
+}
+async function loadYaml(){
+  const j=await api('/policy/yaml');
+  $("#yml").value = j.yaml || "";
+}
+$("#btn_apply").onclick=async()=>{
+  try{
+    const y=$("#yml").value; const j=await api('/policy/yaml','POST',{yaml_text:y});
+    $("#apply_out").textContent = JSON.stringify(j,null,2);
+  }catch(e){ $("#apply_out").textContent = e; }
+};
+$("#btn_eval_net").onclick=async()=>{
+  const j=await api(`/policy/eval/net?user_id=${encodeURIComponent($("#uid").value)}&host=${encodeURIComponent($("#host").value)}&port=${encodeURIComponent($("#port").value)}`);
+  $("#out_net").textContent = JSON.stringify(j,null,2);
+};
+$("#btn_eval_fs").onclick=async()=>{
+  const j=await api(`/policy/eval/fs?user_id=${encodeURIComponent($("#uid").value)}&path=${encodeURIComponent($("#path").value)}&write=${$("#write").value}`);
+  $("#out_fs").textContent = JSON.stringify(j,null,2);
+};
+loadYaml();
+</script>
+</body>
+</html>

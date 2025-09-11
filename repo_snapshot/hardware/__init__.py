@@ -1,0 +1,1 @@
+"""Hardware adapters (GPIO/I2C/SPI)."""

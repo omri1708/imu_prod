@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Timeline Filters</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{padding:12px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+input,select,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+tr.p1{border-left:4px solid #58a6ff}
+tr.p5{border-left:4px solid #2ea043}
+tr.p9{border-left:4px solid #d29922}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Timeline Filters</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="controls">
+    <label>Producer <input id="prod"></label>
+    <label>Type
+      <select id="typ">
+        <option value="">any</option>
+        <option>event</option>
+        <option>progress</option>
+        <option>gatekeeper</option>
+        <option>log</option>
+      </select>
+    </label>
+    <label>Min priority <input id="prio" type="number" value="0" min="0" max="10"></label>
+    <label>Search <input id="q"></label>
+    <button id="btn_pause">Pause</button>
+    <button id="btn_resume" disabled>Resume</button>
+  </div>
+  <table id="tbl"><thead><tr><th>time</th><th>producer</th><th>type</th><th>priority</th><th>note</th></tr></thead><tbody></tbody></table>
+</main>
+<script>
+let paused=false;
+const $=s=>document.querySelector(s);
+$("#btn_pause").onclick=()=>{ paused=true; $("#btn_pause").disabled=true; $("#btn_resume").disabled=false; };
+$("#btn_resume").onclick=()=>{ paused=false; $("#btn_resume").disabled=true; $("#btn_pause").disabled=false; };
+
+function row(o){
+  if(paused) return;
+  const prod=$("#prod").value.trim().toLowerCase();
+  const typ=$("#typ").value;
+  const minp=parseInt($("#prio").value||"0");
+  const q=$("#q").value.trim().toLowerCase();
+  const p=o.producer?String(o.producer).toLowerCase():"";
+  const note=(o.note||o.data?.note||"")+"";
+  const pr=o.priority ?? 5;
+  if(prod && p.indexOf(prod)===-1) return;
+  if(typ && (o.type||"event")!==typ) return;
+  if(pr < minp) return;
+  if(q && note.toLowerCase().indexOf(q)===-1) return;
+  const tr=document.createElement('tr'); tr.className='p'+Math.min(9,Math.max(1,pr));
+  const ts=new Date((o.ts||Date.now())*1000).toLocaleTimeString();
+  tr.innerHTML=`<td>${ts}</td><td>${o.producer||''}</td><td>${o.type||'event'}</td><td>${pr}</td><td>${note}</td>`;
+  $("#tbl tbody").prepend(tr);
+  const rows=$("#tbl tbody").children; if(rows.length>1000) rows[rows.length-1].remove();
+}
+
+(function connect(){
+  const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=timeline`;
+  const ws=new WebSocket(url);
+  ws.onmessage=ev=>{ try{ const o=JSON.parse(ev.data); row(o); }catch(e){} };
+  ws.onclose=()=>setTimeout(connect,1500);
+})();
+</script>
+</body>
+</html>

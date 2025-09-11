@@ -1,0 +1,14 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"Ansible Galaxy Install",
+  "type":"object",
+  "required":["requirements","dest"],
+  "properties":{
+    "requirements":{"type":"string","minLength":1},
+    "dest":{"type":"string","minLength":1},
+    "server_opt":{"type":"string","default":""},
+    "token_opt":{"type":"string","default":""},
+    "extra_opt":{"type":"string","default":""}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{{- if .Values.prometheusRules.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "cp.fullname" . }}-gatekeeper-rules
+  namespace: {{ .Values.namespace }}
+spec:
+  groups:
+  - name: gatekeeper-recording
+    interval: 1m
+    rules:
+    - record: gatekeeper:violations:rate5m
+      expr: sum(rate(gatekeeper_violations[5m])) by (constraint, enforcement_action)
+    - record: gatekeeper:violations:day
+      expr: sum(increase(gatekeeper_violations[1d])) by (constraint, enforcement_action)
+    - record: gatekeeper:denies:rate5m
+      expr: sum(rate(gatekeeper_violations{enforcement_action="deny"}[5m]))
+{{- end }}

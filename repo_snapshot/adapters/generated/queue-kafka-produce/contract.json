@@ -1,0 +1,13 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#",
+  "title":"Kafka Console Producer",
+  "type":"object",
+  "required":["bootstrap","topic"],
+  "properties":{
+    "bootstrap":{"type":"string","minLength":3},
+    "topic":{"type":"string","minLength":1},
+    "props_opt":{"type":"string","default":""},
+    "input_opt":{"type":"string","default":""}
+  },
+  "additionalProperties": false
+}

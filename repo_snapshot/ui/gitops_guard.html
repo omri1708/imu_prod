@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU GitOps Guard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU GitOps Guard</strong>
+  <a class="badge" href="/ui/gitops.html" style="text-decoration:none">← gitops</a>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Verify Git Commit Signatures</h3>
+    <label>Repo path</label><input id="repo" value=".imu/gitops/repo"/>
+    <label>Rev range</label><input id="range" value="HEAD~20..HEAD"/>
+    <div style="margin-top:8px"><button id="btn_verify">Verify</button></div>
+    <pre id="out_verify"></pre>
+  </div>
+
+  <div class="card">
+    <h3>GitHub PR Checks</h3>
+    <label>Owner</label><input id="gh_owner" value="org"/>
+    <label>Repo</label><input id="gh_repo"  value="repo"/>
+    <label>PR #</label><input id="gh_pr" type="number" value="1"/>
+    <label>Required labels</label><input id="gh_labels" value="approved,ready"/>
+    <div style="margin-top:8px"><button id="btn_ghchk">Check</button></div>
+    <pre id="out_ghchk"></pre>
+
+    <h4>Merge</h4>
+    <label>Method</label><input id="gh_method" value="merge"/>
+    <div style="margin-top:8px"><button id="btn_ghmerge">Merge</button></div>
+    <pre id="out_ghmerge"></pre>
+  </div>
+
+  <div class="card">
+    <h3>GitLab MR Checks</h3>
+    <label>Base URL</label><input id="gl_url" value="https://gitlab.com/api/v4"/>
+    <label>Project ID</label><input id="gl_pid" value="123456"/>
+    <label>MR IID</label><input id="gl_mr" type="number" value="1"/>
+    <div style="margin-top:8px"><button id="btn_glchk">Check MR</button></div>
+    <pre id="out_glchk"></pre>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(p,m="GET",b=null){ const r=await fetch(p,{method:m,headers:{'content-type':'application/json'},body:b?JSON.stringify(b):null}); const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j; }
+$("#btn_verify").onclick=async()=>{ const j=await api('/gitops/guard/git/verify_signatures','POST',{repo_path:$("#repo").value,rev_range:$("#range").value}); $("#out_verify").textContent=JSON.stringify(j,null,2); };
+$("#btn_ghchk").onclick=async()=>{ const req={owner:$("#gh_owner").value,repo:$("#gh_repo").value,pr_number:parseInt($("#gh_pr").value),require_labels:$("#gh_labels").value.split(',').map(s=>s.trim())}; const j=await api('/gitops/guard/github/check_pr','POST',req); $("#out_ghchk").textContent=JSON.stringify(j,null,2); };
+$("#btn_ghmerge").onclick=async()=>{ const req={owner:$("#gh_owner").value,repo:$("#gh_repo").value,pr_number:parseInt($("#gh_pr").value),method:$("#gh_method").value}; const j=await api('/gitops/guard/github/merge_pr','POST',req); $("#out_ghmerge").textContent=JSON.stringify(j,null,2); };
+$("#btn_glchk").onclick=async()=>{ const req={base_url:$("#gl_url").value,project_id:$("#gl_pid").value,mr_iid:parseInt($("#gl_mr").value)}; const j=await api('/gitops/guard/gitlab/check_mr','POST',req); $("#out_glchk").textContent=JSON.stringify(j,null,2); };
+</script>
+</body>
+</html>

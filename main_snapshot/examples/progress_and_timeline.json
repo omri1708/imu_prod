@@ -1,0 +1,17 @@
+{
+  "layout": {
+    "grid": {
+      "areas": [
+        ["header","header"],
+        ["left","right"]
+      ],
+      "cols": "1fr 2fr",
+      "rows": "auto 1fr"
+    }
+  },
+  "components": [
+    {"type":"header","text":"Build & Deploy"},
+    {"type":"progress_bar","topic":"progress","label":"Adapter progress","grid_area":"left"},
+    {"type":"event_timeline","topic":"timeline","max_items":200,"grid_area":"right"}
+  ]
+}

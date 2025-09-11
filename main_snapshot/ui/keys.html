@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Key Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,button,textarea{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Key Admin</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">← back</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Keys</h3>
+    <button id="btn_list">List</button>
+    <table id="tbl"><thead><tr><th>kid</th><th>active</th><th>created</th><th>comment</th><th>actions</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h3>Rotate / Activate</h3>
+    <label>Comment</label><input id="comment" value="rotated via UI"/>
+    <div style="margin-top:8px"><button id="btn_rotate">Rotate & Activate</button></div>
+
+    <h4 style="margin-top:16px">Activate existing</h4>
+    <label>kid</label><input id="kid"/>
+    <div style="margin-top:8px"><button id="btn_activate">Activate</button></div>
+
+    <h4 style="margin-top:16px">Export Public Bundle</h4>
+    <button id="btn_export">Export</button>
+    <pre id="pub_out"></pre>
+
+    <h4 style="margin-top:16px">Import Public Key</h4>
+    <label>kid</label><input id="imp_kid" placeholder="kid"/>
+    <label>pub pem</label><textarea id="imp_pem" rows="6" placeholder="-----BEGIN PUBLIC KEY----- ..."></textarea>
+    <button id="btn_import">Import</button>
+    <pre id="imp_out"></pre>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(path, method="GET", body=null){
+  const r=await fetch(path,{method,headers:{'content-type':'application/json'},body: body?JSON.stringify(body):null});
+  const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j;
+}
+async function list(){
+  const j=await api('/keys/');
+  const tb=$("#tbl tbody"); tb.innerHTML='';
+  (j.keys||[]).forEach(k=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${k.kid}</td><td>${k.active}</td><td>${new Date((k.created||0)*1000).toLocaleString()}</td><td>${k.comment||''}</td>
+    <td><button data-kid="${k.kid}" class="act">activate</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('button.act').forEach(b=>{
+    b.onclick=async()=>{ const j=await api('/keys/activate','POST',{kid:b.dataset.kid}); alert('activated '+j.active); list(); }
+  });
+}
+$("#btn_list").onclick=list;
+$("#btn_rotate").onclick=async()=>{ const j=await api('/keys/rotate','POST',{comment:$("#comment").value}); alert('rotated: '+j.active); list(); }
+$("#btn_activate").onclick=async()=>{ const j=await api('/keys/activate','POST',{kid:$("#kid").value}); alert('activated '+j.active); list(); }
+$("#btn_export").onclick=async()=>{ const j=await api('/keys/public_bundle'); $("#pub_out").textContent = JSON.stringify(j.bundle,null,2); }
+$("#btn_import").onclick=async()=>{ const j=await api('/keys/import_public','POST',{kid:$("#imp_kid").value,pub_pem:$("#imp_pem").value}); $("#imp_out").textContent=JSON.stringify(j,null,2); list(); }
+list();
+</script>
+</body>
+</html>

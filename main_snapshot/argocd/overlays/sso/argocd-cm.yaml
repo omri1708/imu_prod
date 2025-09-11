@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  url: https://argocd.yourcompany.com
+  # OIDC built-in (ללא Dex)
+  oidc.config: |
+    name: SSO
+    issuer: https://idp.example.com
+    clientID: $argocd-oidc:client_id
+    clientSecret: $argocd-oidc:client_secret
+    requestedScopes: ["openid","profile","email"]
+    requestedIDTokenClaims:
+      email:
+        essential: true
+        value: "*@yourcompany.com"

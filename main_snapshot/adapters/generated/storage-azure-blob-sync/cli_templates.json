@@ -1,0 +1,6 @@
+{
+  "kind": "storage.azure.blob.sync",
+  "templates": {
+    "any": "azcopy sync {src} {dst}{sas_opt}{extra_opt}"
+  }
+}

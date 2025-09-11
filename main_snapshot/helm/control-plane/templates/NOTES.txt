@@ -1,0 +1,15 @@
+Thank you for installing IMU Control Plane.
+
+* API Service:      (ClusterIP)  {{ include "cp.fullname" . }}-svc:{{ .Values.service.apiPort }}
+* WS Service:                    {{ include "cp.fullname" . }}-svc:{{ .Values.service.wsPort }}
+* UI Service:                    {{ include "cp.fullname" . }}-svc:{{ .Values.service.uiPort }}
+
+Ingress: {{ if .Values.ingress.enabled }}ENABLED{{ else }}DISABLED{{ end }}
+
+Dependencies (install separately if needed):
+- Prometheus Operator CRDs for ServiceMonitor (if serviceMonitor.enabled=true)
+- Gatekeeper (OPA) CRDs for constraints (if gatekeeper.enabled=true)
+- Ingress Controller (e.g. ingress-nginx) if ingress.enabled=true
+
+To upgrade with production values:
+  helm upgrade --install {{ .Release.Name }} {{ .Chart.Name }} -n {{ .Values.namespace }} -f values.production.yaml

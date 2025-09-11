@@ -1,0 +1,28 @@
+name: imu-oidc-secrets
+runtime: nodejs
+description: Provision OIDC K8s Secrets for Grafana/ArgoCD (from Pulumi secrets)
+infra/pulumi/oidc-secrets/index.ts
+
+import * as pulumi from "@pulumi/pulumi";
+import * as k8s from "@pulumi/kubernetes";
+
+const cfg = new pulumi.Config("oidc");
+const gClientId = cfg.requireSecret("grafanaClientId");
+const gSecret   = cfg.requireSecret("grafanaClientSecret");
+const aClientId = cfg.requireSecret("argocdClientId");
+const aSecret   = cfg.requireSecret("argocdClientSecret");
+
+const grafanaOidc = new k8s.core.v1.Secret("grafana-oidc", {
+  metadata: { name: "grafana-oidc", namespace: "monitoring" },
+  stringData: { client_id: gClientId, client_secret: gSecret },
+  type: "Opaque",
+});
+
+const argocdOidc = new k8s.core.v1.Secret("argocd-oidc", {
+  metadata: { name: "argocd-oidc", namespace: "argocd" },
+  stringData: { client_id: aClientId, client_secret: aSecret },
+  type: "Opaque",
+});
+
+export const grafana = grafanaOidc.metadata.name;
+export const argocd  = argocdOidc.metadata.name;

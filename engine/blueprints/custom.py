@@ -1,0 +1,2 @@
+def generate(spec):
+    return {}

@@ -1,0 +1,22 @@
+{
+  "title": "IMU Gate Trends",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Violations per day (by constraint)",
+      "targets": [
+        { "expr": "gatekeeper:violations:day", "legendFormat": "{{constraint}}/{{enforcement_action}}" }
+      ],
+      "legend": { "show": true }
+    },
+    {
+      "type": "graph",
+      "title": "Denied (rate 5m)",
+      "targets": [
+        { "expr": "gatekeeper:denies:rate5m" }
+      ]
+    }
+  ]
+}

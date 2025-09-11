@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+pydantic>=2
+pydantic-settings
+alembic
+psycopg2-binary ; platform_system != "Windows"
+prometheus-client

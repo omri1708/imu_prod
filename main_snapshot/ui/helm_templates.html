@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Helm Template Synth</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1020;color:#e6edf3;margin:0}
+header{padding:10px 14px;background:#11162a;border-bottom:1px solid #1f2a44;display:flex;gap:10px;align-items:center}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:420px 1fr;gap:12px;padding:12px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:12px}
+label{display:block;font-size:12px;color:#9fb7ff}
+input,textarea,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+textarea{width:100%;height:240px;font-family:ui-monospace,menlo,consolas,monospace}
+pre{background:#0e1630;border:1px solid #233259;border-radius:8px;padding:8px;overflow:auto}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Helm Template Synth</strong>
+  <a class="badge" href="/ui/index.html" style="text-decoration:none">home</a>
+</header>
+<main>
+  <div class="card">
+    <h3>Create Chart</h3>
+    <textarea id="spec">{
+  "name": "hello-web",
+  "version": "0.1.0",
+  "appVersion": "1.0.0",
+  "namespace": "default",
+  "release": "hello",
+  "serviceType": "ClusterIP",
+  "replicas": 2,
+  "containerPort": 80,
+  "image": { "repository":"nginx", "tag":"alpine", "pullPolicy":"IfNotPresent" },
+  "env": {"GREETING":"hi"},
+  "resources": {"cpu":"100m","memory":"128Mi"},
+  "hpa": true, "hpaMin": 2, "hpaMax": 5, "hpaCpu": 75
+}</textarea>
+    <div><button id="btn_create">Create</button></div>
+    <pre id="out_create"></pre>
+  </div>
+
+  <div class="card">
+    <h3>Charts</h3>
+    <button id="btn_list">List</button>
+    <table id="tbl"><thead><tr><th>slug</th><th>dir</th><th>actions</th></tr></thead><tbody></tbody></table>
+    <h3>Render / Upgrade</h3>
+    <label>name/release</label><input id="name" value="hello"/>
+    <label>namespace</label><input id="ns" value="default"/>
+    <pre id="out_ops"></pre>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+async function api(p,m='GET',b=null){ const r=await fetch(p,{method:m,headers:{'content-type':'application/json'},body:b?JSON.stringify(b):null}); const j=await r.json(); if(!r.ok) throw new Error(j.detail||JSON.stringify(j)); return j; }
+
+$("#btn_create").onclick=async()=>{
+  try{ const spec=JSON.parse($("#spec").value); const j=await api('/helm/synth/create','POST',spec); $("#out_create").textContent=JSON.stringify(j,null,2); }catch(e){ $("#out_create").textContent=String(e); }
+};
+$("#btn_list").onclick=async()=>{
+  const j=await api('/helm/synth/list'); const tb=$("#tbl tbody"); tb.innerHTML='';
+  (j.items||[]).forEach(it=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${it.slug}</td><td>${it.dir}</td>
+      <td>
+        <button data-s="${it.slug}" class="render">dry-render</button>
+        <button data-s="${it.slug}" class="upgrade">upgrade (dry)</button>
+      </td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('button.render').forEach(b=>{
+    b.onclick=async()=>{ const j=await api('/helm/synth/dry_template','POST',{"slug":b.dataset.s,"name":$("#name").value}); $("#out_ops").textContent=JSON.stringify(j,null,2); };
+  });
+  tb.querySelectorAll('button.upgrade').forEach(b=>{
+    b.onclick=async()=>{ const j=await api('/helm/synth/upgrade','POST',{"slug":b.dataset.s,"release":$("#name").value,"namespace":$("#ns").value,"execute":false}); $("#out_ops").textContent=JSON.stringify(j,null,2); };
+  });
+};
+</script>
+</body>
+</html>

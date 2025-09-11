@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>IMU Dashboard – WFQ Live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{font-family:system-ui, sans-serif; background:#0b1020; color:#e6edf3; margin:0}
+header{display:flex;align-items:center;gap:10px;background:#11162a;border-bottom:1px solid #1f2a44;padding:10px 14px}
+.badge{background:#243152;border:1px solid #355;color:#9fb7ff;border-radius:999px;padding:2px 8px;font-size:12px}
+main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 48px)}
+aside{border-right:1px solid #1f2a44;padding:10px}
+section{padding:10px}
+.card{background:#12172d;border:1px solid #233259;border-radius:10px;padding:10px;margin-bottom:10px}
+.label{color:#9fb7ff;font-size:12px}
+input,select,button{background:#0e1630;border:1px solid #233259;color:#e6edf3;border-radius:8px;padding:6px 8px}
+button{cursor:pointer}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid #233259;padding:6px 8px;font-size:12px}
+tr.ev-progress{background:#101c33}
+tr.ev-event{background:#101829}
+tr.ev-log{background:#101420;color:#b8b8b8}
+.priority-1{border-left:4px solid #58a6ff}
+.priority-5{border-left:4px solid #2ea043}
+.priority-9{border-left:4px solid #d29922}
+</style>
+</head>
+<body>
+<header>
+  <strong>IMU Dashboard – WFQ</strong>
+  <span class="badge" id="ws_state">connecting…</span>
+  <span class="badge" id="topic_badge">topic: timeline</span>
+</header>
+<main>
+  <aside>
+    <div class="card">
+      <div class="label">Topic</div>
+      <select id="topic">
+        <option>timeline</option>
+        <option>progress</option>
+        <option>logs</option>
+      </select>
+      <div class="label">Filter (contains)</div>
+      <input id="filter" placeholder="text to filter"/>
+      <div style="margin-top:8px"><button id="btn_ws">Connect WS</button></div>
+    </div>
+    <div class="card">
+      <div class="label">Publish Event</div>
+      <div class="label">Type</div>
+      <select id="etype">
+        <option>event</option>
+        <option>progress</option>
+        <option>log</option>
+      </select>
+      <div class="label">Note / Pct</div>
+      <input id="note" value="hello from UI"/>
+      <input id="pct" type="number" placeholder="pct (0..100)"/>
+      <div style="margin-top:8px"><button id="btn_pub">Publish</button></div>
+      <pre id="pub_out" style="font-size:12px"></pre>
+    </div>
+  </aside>
+  <section>
+    <div class="card">
+      <table id="tbl">
+        <thead><tr><th>ts</th><th>type</th><th>note</th><th>pct</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+let ws;
+let topic = 'timeline';
+function connect(){
+  const url=`ws://${location.host.replace(/:\d+$/,':8766')}/ws/wfq?topic=${encodeURIComponent(topic)}`;
+  ws = new WebSocket(url);
+  $("#ws_state").textContent='connecting…';
+  ws.onopen = ()=> $("#ws_state").textContent='connected';
+  ws.onclose= ()=> { $("#ws_state").textContent='disconnected'; setTimeout(connect,1500); };
+  ws.onmessage = ev => {
+    const o = JSON.parse(ev.data||'{}');
+    renderRow(o);
+  }
+}
+function renderRow(o){
+  const term = ($("#filter").value||"").toLowerCase();
+  const note = (o.note||o.data?.note||"")+"";
+  if(term && !note.toLowerCase().includes(term)) return;
+  const tr=document.createElement('tr');
+  const cls = o.type==='progress'?'ev-progress':(o.type==='event'?'ev-event':'ev-log');
+  tr.className = cls + ' priority-'+(o.priority||5);
+  const ts = new Date((o.ts||Date.now())*1000).toLocaleTimeString();
+  tr.innerHTML = `<td>${ts}</td><td>${o.type||'event'}</td><td>${note}</td><td>${o.pct??''}</td>`;
+  $("#tbl tbody").prepend(tr);
+  const rows = $("#tbl tbody").children;
+  if(rows.length>400) rows[rows.length-1].remove();
+}
+$("#btn_ws").onclick=()=>{
+  topic = $("#topic").value;
+  $("#topic_badge").textContent = `topic: ${topic}`;
+  try{ ws.close(); }catch(e){}
+  connect();
+};
+$("#btn_pub").onclick=async ()=>{
+  const t=$("#topic").value;
+  const typ=$("#etype").value;
+  const note=$("#note").value;
+  const pct=parseFloat($("#pct").value);
+  const ev = typ==='progress'? {"type":"progress","pct":pct,"note":note} : {"type":typ, "note":note};
+  const r=await fetch('/events/publish',{method:'POST',headers:{'content-type':'application/json'},
+     body: JSON.stringify({topic:t, producer:'ui', priority:5, event:ev})});
+  $("#pub_out").textContent = JSON.stringify(await r.json(),null,2);
+};
+connect();
+</script>
+</body>
+</html>

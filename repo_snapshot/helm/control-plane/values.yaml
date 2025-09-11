@@ -1,0 +1,88 @@
+namespace: default
+
+images:
+  api: { repository: ghcr.io/your-org/imu-api, tag: latest, pullPolicy: IfNotPresent }
+  ws:  { repository: ghcr.io/your-org/imu-ws,  tag: latest, pullPolicy: IfNotPresent }
+  ui:  { repository: nginx,                   tag: alpine, pullPolicy: IfNotPresent }
+
+replicas: { api: 1, ws: 1, ui: 1 }
+
+hpa:
+  enabled: true
+  api: { min: 1, max: 5, cpu: 75 }
+  ws:  { min: 1, max: 5, cpu: 75 }
+
+service:
+  apiPort: 8000
+  wsPort:  8766
+  uiPort:  8080
+  type: ClusterIP
+
+serviceMonitor:
+  enabled: true
+  labels: { release: prom-operator }
+  interval: 30s
+  path: /metrics
+  scheme: http
+
+networkPolicy:
+  enabled: true
+  profile: standard   # strict|standard|lenient
+  allowSameNamespace: true
+  ingressCidrs: []
+  egressCidrs: ["0.0.0.0/0"]
+
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: ""
+
+gatekeeper:
+  enabled: false
+  requireLabels:
+    enabled: true
+    key: "team"
+
+dashboards:
+  enabled: true
+
+securityContext:
+  pod:
+    runAsNonRoot: true
+    seccompProfile: { type: RuntimeDefault }
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: { drop: [ "ALL" ] }
+
+synthetics:
+  enabled: true
+  vus: 10
+  duration: "30s"
+  p95_ms: 800
+  error_rate: 0.02
+  ws:
+    enabled: true
+    url: "ws://{{ include \"cp.fullname\" . }}-svc.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.wsPort }}/ws/wfq?topic=timeline"
+    messages: 5
+    interval_ms: 500
+
+prometheusRules:
+  enabled: true
+
+observability:
+  pushgateway:
+    enabled: false
+    url: ""    # דוגמה: http://pushgateway.monitoring.svc:9091
+
+availability:
+  pdb:
+    enabled: true
+    api: { minAvailable: 1 }
+    ws:  { minAvailable: 1 }
+  spread:
+    enabled: true
+    topologyKey: "topology.kubernetes.io/zone"
+    maxSkew: 1
+    whenUnsatisfiable: "ScheduleAnyway"
