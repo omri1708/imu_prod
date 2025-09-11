@@ -1,103 +1,140 @@
-from __future__ import annotations
-import os
-from typing import Dict, Any, Type
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import PlainTextResponse
-from sqlmodel import SQLModel, Session, select
-from prometheus_client import CollectorRegistry, Gauge, generate_latest
+import os, logging, time
+from typing import Dict, List, Any
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
-from .db import init_engine, get_session, try_connect_db, run_alembic_upgrade_if_needed
-from .models import build_models_from_entities_spec, BaseEntity
-from .spec_loader import load_entities_spec, load_behavior_spec
-from .compute import WeightedScore
+LOG_LEVEL = os.getenv('LOG_LEVEL','INFO').upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+app = FastAPI(title='IMU Domain Backend')
 
-LOG_LEVEL = os.getenv("LOG_LEVEL","INFO").upper()
-app = FastAPI(title="IMU API (SQLModel)")
-entities_spec = load_entities_spec()
-behavior_spec = load_behavior_spec()
-ModelReg: Dict[str, Type[BaseEntity]] = build_models_from_entities_spec(entities_spec)
+@app.get('/healthz')
+def healthz():
+    return {'ok': True, 'ts': time.time()}
 
-engine = init_engine()
-if os.getenv("DB_AUTO_CREATE","1").lower() not in ("0","false","no","off"):
-    SQLModel.metadata.create_all(engine)
-if os.getenv("DB_AUTO_MIGRATE","0").lower() in ("1","true","yes","on"):
-    try:
-        run_alembic_upgrade_if_needed()
-    except Exception:
-        pass
-
-@app.get("/healthz")
-def healthz(): return {"ok": True}
-
-@app.get("/readyz")
+@app.get('/readyz')
 def readyz():
-    ok, msg = try_connect_db(engine)
-    return {"ready": ok, "db": msg}
+    return {'ready': True}
 
-_registry = CollectorRegistry()
-_g_up = Gauge("app_up", "1 if app is up", registry=_registry)
-_g_up.set(1)
-
-@app.get("/metrics", response_class=PlainTextResponse)
+@app.get('/metrics')
 def metrics():
-    return generate_latest(_registry).decode("utf-8")
+    # minimal Prometheus plaintext without external deps
+    body = '# HELP app_up 1 if app is up\n# TYPE app_up gauge\napp_up 1\n'
+    return (body, 200, {'Content-Type': 'text/plain; version=0.0.4'})
 
-@app.get("/")
-def root(): return {"ok": True, "entities": list(ModelReg.keys())}
+class User(BaseModel):
+    id: int
+    age: int
+    height_cm: int
+    weight_kg: float
+    level: str
 
-def _plural(n: str) -> str: return n.lower()+"s"
+DB_USER: Dict[int, User] = {}
 
-def register_crud(model_name: str, model_cls: Type[BaseEntity]) -> None:
-    p = _plural(model_name)
-    
-    @app.post(f"/{p}")
-    def create(obj: model_cls, s: Session = Depends(get_session)):  # type: ignore
-        if getattr(obj, "id", None) is None:
-            raise HTTPException(422, "id required")
-        if s.get(model_cls, obj.id) is not None:
-            raise HTTPException(409, "id exists")
-        s.add(obj)
-        s.commit()
-        s.refresh(obj)
-        return {"ok": True, model_name.lower(): obj}
-    
-    @app.get(f"/{p}/{{oid}}")
-    def read(oid: int, s: Session = Depends(get_session)):
-        o = s.get(model_cls, oid) 
-        if o is None:
-            raise HTTPException(404, "not found")
-        return o
-    
-    @app.get(f"/{p}")
-    def list_(s: Session = Depends(get_session)):
-        return list(s.exec(select(model_cls)))
-    
-    @app.put(f"/{p}/{{oid}}")
-    def update(oid: int, obj: model_cls, s: Session = Depends(get_session)):  # type: ignore
-        o = s.get(model_cls, oid) 
-        if o is None:
-            raise HTTPException(404, "not found")
-        for k,v in obj.model_dump().items():
-            setattr(o,k,v)
-        s.add(o)
-        s.commit()
-        s.refresh(o)
-        return {"ok": True, model_name.lower(): o}
-    
-    @app.delete(f"/{p}/{{oid}}")
-    def delete(oid: int, s: Session = Depends(get_session)):
-        o = s.get(model_cls, oid) 
-        if o is None:
-            raise HTTPException(404, "not found")
-        s.delete(o)
-        s.commit()
-        return {"ok": True}
+@app.post('/users')
+def create_user(obj: User):
+    if obj.id in DB_USER:
+        raise HTTPException(409, 'id exists')
+    DB_USER[obj.id] = obj
+    return {'ok': True, 'user': obj}
+@app.get('/users/{oid}')
+def get_user(oid: int):
+    if oid not in DB_USER:
+        raise HTTPException(404, 'not found')
+    return DB_USER[oid]
+@app.get('/users')
+def list_user():
+    return list(DB_USER.values())
 
-for name, cls in ModelReg.items():
-    register_crud(name, cls)
+class WorkoutSession(BaseModel):
+    id: int
+    user_id: int
+    date: str
+    minutes: int
+    intensity: int
+    type: str
 
-if os.getenv("ENABLE_BEHAVIOR","true").lower() not in ("0","false","no","off") and behavior_spec:
-    score = WeightedScore.from_spec(behavior_spec)
-    @app.post(f"/compute/{score.name}")
-    def compute(payload: Dict[str, float]) -> Dict[str, Any]:
-        return {"ok": True, "score": score.eval(payload)}
+DB_WORKOUTSESSION: Dict[int, WorkoutSession] = {}
+
+@app.post('/workoutsessions')
+def create_workoutsession(obj: WorkoutSession):
+    if obj.id in DB_WORKOUTSESSION:
+        raise HTTPException(409, 'id exists')
+    DB_WORKOUTSESSION[obj.id] = obj
+    return {'ok': True, 'workoutsession': obj}
+@app.get('/workoutsessions/{oid}')
+def get_workoutsession(oid: int):
+    if oid not in DB_WORKOUTSESSION:
+        raise HTTPException(404, 'not found')
+    return DB_WORKOUTSESSION[oid]
+@app.get('/workoutsessions')
+def list_workoutsession():
+    return list(DB_WORKOUTSESSION.values())
+
+class Plan(BaseModel):
+    id: int
+    user_id: int
+    start_date: str
+    weeks: int
+    goal: str
+    weekly_minutes: int
+
+DB_PLAN: Dict[int, Plan] = {}
+
+@app.post('/plans')
+def create_plan(obj: Plan):
+    if obj.id in DB_PLAN:
+        raise HTTPException(409, 'id exists')
+    DB_PLAN[obj.id] = obj
+    return {'ok': True, 'plan': obj}
+@app.get('/plans/{oid}')
+def get_plan(oid: int):
+    if oid not in DB_PLAN:
+        raise HTTPException(404, 'not found')
+    return DB_PLAN[oid]
+@app.get('/plans')
+def list_plan():
+    return list(DB_PLAN.values())
+
+class Recommendation(BaseModel):
+    id: int
+    user_id: int
+    plan_id: int
+    next_session_type: str
+    target_minutes: int
+    rationale: str
+
+DB_RECOMMENDATION: Dict[int, Recommendation] = {}
+
+@app.post('/recommendations')
+def create_recommendation(obj: Recommendation):
+    if obj.id in DB_RECOMMENDATION:
+        raise HTTPException(409, 'id exists')
+    DB_RECOMMENDATION[obj.id] = obj
+    return {'ok': True, 'recommendation': obj}
+@app.get('/recommendations/{oid}')
+def get_recommendation(oid: int):
+    if oid not in DB_RECOMMENDATION:
+        raise HTTPException(404, 'not found')
+    return DB_RECOMMENDATION[oid]
+@app.get('/recommendations')
+def list_recommendation():
+    return list(DB_RECOMMENDATION.values())
+
+class ComputeIn(BaseModel):
+    productId: float = 0.0
+
+WEIGHTS_CALCULATETOTALPRICE = [1, 1]
+INPUTS_CALCULATETOTALPRICE  = ["productId"]
+
+@app.post('/compute/CalculateTotalPrice')
+def compute(inp: ComputeIn):
+    xs = [getattr(inp, k, 0.0) for k in INPUTS_CALCULATETOTALPRICE]
+    ws = WEIGHTS_CALCULATETOTALPRICE
+    if len(xs) != len(ws):
+        raise HTTPException(422, 'weights mismatch')
+    score = sum(x*w for x, w in zip(xs, ws))
+    return {'ok': True, 'score': score}
+
+@app.get('/')
+def root():
+    return {'ok': True, 'entities': ["User", "WorkoutSession", "Plan", "Recommendation"] }
