@@ -1,1 +1,0 @@
-"""Grounding: FactGate, EvidenceIndex, Provenance, Audit."""

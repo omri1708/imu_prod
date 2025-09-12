@@ -22,13 +22,45 @@ class _SafeDict(dict):
 
 class PromptBuilder:
     def __init__(self, templates_path:str="./config/prompt_templates.jsonl", stats_path:str="./assurance_store/pb.stats.json"):
+        self._templates: Dict[str, Dict[str,str]] = {}
         self.templates_path = templates_path
         self.stats_path = stats_path
         self.templates = self._load_templates()
         self.stats = self._load_stats()
+        self.register_defaults()
         # ודא שלכל תבנית יש רשומת סטטיסטיקה
         for t in self.templates:
             self.stats.setdefault(t["id"], {"n":0,"ok":0,"ms_sum":0.0,"last":0})
+
+    def register(self, task: str, intent: str, system: str, user: str, json_only: bool = False):
+        self._templates.setdefault(task, {})
+        key = f"{task}:{intent}"
+        self._templates[task][key] = {"system": system, "user": user, "json_only": json_only}
+
+    def register_defaults(self):
+        # לא “קשיחים” בקוד בכל מקום, אלא מרכזיים כאן (ועוברים פרסונה/קונטקסט)
+        self.register(
+            "router", "intent",
+            system=("Classify the user's message into one intent: talk, knowledge, build, or control. "
+                    "Return JSON ONLY with fields: intent, confidence (0..1), needs_sources (bool), "
+                    "required_slots (array of {name,question}). No extra text."),
+            user=("USER:\n{{USER_TEXT}}\nCONTEXT:\n{{CONTEXT_JSON}}")
+        )
+        self.register(
+            "router", "slots",
+            system=("Extract values only for the requested keys from the user's message. "
+                    "Return JSON ONLY: {\"values\": {<key>: <string>...}}. Omit missing."),
+            user=("REQUIRED KEYS: {{REQUIRED_KEYS_JSON}}\nUSER:\n{{USER_TEXT}}")
+        )
+        self.register(
+            "design", "arch",
+            system=("From SPEC and CONTEXT produce a concrete, testable design JSON per schema: "
+                    "{\"requirements\":...,\"tradeoffs\":...,\"architecture\":...,\"infra\":...,"
+                    "\"cicd\":...,\"monitoring\":...,\"open_questions\":[],\"unknowns\":[]} "
+                    "No external sources are required at design time. JSON ONLY."),
+            user=("SPEC:\n{{SPEC_JSON}}\nCONTEXT:\n{{CONTEXT_JSON}}"),
+            json_only=True
+        )
 
     def _load_templates(self) -> List[Dict[str,Any]]:
         if self.templates_path and os.path.exists(self.templates_path):
@@ -37,7 +69,27 @@ class PromptBuilder:
             except Exception:
                 pass
         return DEFAULT_TEMPLATES
+    
+    def _ensure_defaults(self):
+        # נבדק אם קיימות; אם לא—נרשום
+        def _reg(task, intent, sys, usr):
+            self._templates.setdefault(task, {})
+            key = f"{task}:{intent}"
+            if key not in self._templates[task]:
+                self._templates[task][key] = {"sys": sys, "usr": usr}
 
+        _reg("router","intent",
+            "Classify to one of: talk, knowledge, build, control. JSON ONLY: {\"intent\":\"...\",\"confidence\":0..1,\"needs_sources\":bool,\"required_slots\":[{\"name\":\"...\",\"question\":\"...\"}]}",
+            "{prompt}")
+
+        _reg("router","slots",
+            "Extract values for required keys from USER text; JSON ONLY: {\"values\":{<key>:<string>}}",
+            "REQUIRED KEYS: {schema_hint}\n{prompt}")
+
+        _reg("design","arch",
+            "From SPEC produce concrete design JSON per schema; design stage does not require external sources; JSON ONLY.",
+            "SPEC:\n{prompt}\nSCHEMA:\n{schema_hint}")
+    
     def _load_stats(self) -> Dict[str,Any]:
         if self.stats_path and os.path.exists(self.stats_path):
             try:

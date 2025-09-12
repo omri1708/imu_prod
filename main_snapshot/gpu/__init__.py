@@ -1,1 +1,0 @@
-"""GPU runtime (CUDA if available) with CPU fallback."""

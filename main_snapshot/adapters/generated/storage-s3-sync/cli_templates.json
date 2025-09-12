@@ -1,6 +1,0 @@
-{
-  "kind": "storage.s3.sync",
-  "templates": {
-    "any": "aws s3 sync {src} {dst}{profile_opt}{region_opt}{extra_opt}"
-  }
-}

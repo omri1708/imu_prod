@@ -1,94 +1,6 @@
 {
   "fastapi_apps": [
     [
-      "main_snapshot/program_sbx/sbx_vp41ckv9/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_vkugr7rc/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_ktcn8_2i/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_6ra1ia4r/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_5sxoxq9i/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_npyu45ol/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_s0uz8qy2/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_1igfy0wt/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_nikqcp_z/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_i8fzb1m5/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_zoix6z8y/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/program_sbx/sbx_x2z3ateb/in/app.py",
-      "app"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP"
-    ],
-    [
-      "main_snapshot/server/boot.py",
-      "APP"
-    ],
-    [
-      "main_snapshot/server/boot_strict.py",
-      "APP"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "app"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "app"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "APP"
-    ],
-    [
-      "main_snapshot/attic/api/http_api.py",
-      "app"
-    ],
-    [
-      "main_snapshot/services/artifact_server.py",
-      "app"
-    ],
-    [
-      "main_snapshot/services/api/app.py",
-      "app"
-    ],
-    [
       "out/services/api/app.py",
       "app"
     ],
@@ -265,6 +177,14 @@
       "APP"
     ],
     [
+      "server/app_admin.py",
+      "APP"
+    ],
+    [
+      "server/app_public.py",
+      "APP"
+    ],
+    [
       "server/main.py",
       "app"
     ],
@@ -274,6 +194,10 @@
     ],
     [
       "attic/api/http_api.py",
+      "app"
+    ],
+    [
+      ".imu/artifacts/app/9af93b8c236a20d3538086e7f1605bfc5ad9d8e10e1e5ea2510c61d1e3c48162/services/api/app.py",
       "app"
     ],
     [
@@ -309,6 +233,26 @@
       "app"
     ],
     [
+      ".imu/artifacts/build-api_glue/d0db0c9595db4d09fcd3924191a54720362127e95b4c3bf7d44ddfe97e0fc368/services/api/app.py",
+      "app"
+    ],
+    [
+      ".imu/artifacts/build-api_glue/f854156029b6ff27a038c36015f1275bded1c7d8235137e96de487887c9ca57a/services/api/app.py",
+      "app"
+    ],
+    [
+      ".imu/artifacts/Minimal API/d0db0c9595db4d09fcd3924191a54720362127e95b4c3bf7d44ddfe97e0fc368/services/api/app.py",
+      "app"
+    ],
+    [
+      ".imu/artifacts/Minimal API/f854156029b6ff27a038c36015f1275bded1c7d8235137e96de487887c9ca57a/services/api/app.py",
+      "app"
+    ],
+    [
+      ".imu/artifacts/build-custom_glue/9af93b8c236a20d3538086e7f1605bfc5ad9d8e10e1e5ea2510c61d1e3c48162/services/api/app.py",
+      "app"
+    ],
+    [
       ".imu/artifacts/build-custom_glue/b9e879ea82b1ccb3f3070f707045276d552fba21cf2c9ba49cb759f055ee9e64/services/api/app.py",
       "app"
     ],
@@ -341,457 +285,23 @@
       "app"
     ],
     [
+      ".imu/runs/1757605012_3264d1df33f9480d8f3efd956591bfb1_u1/services/api/app.py",
+      "app"
+    ],
+    [
+      ".imu/runs/1757604607_ad4ffbbc6c2a4c41b9a6a9eaf223fb2e_u1/services/api/app.py",
+      "app"
+    ],
+    [
       "services/artifact_server.py",
       "app"
     ],
     [
       "services/api/app.py",
       "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_t7r6lvl5/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_to32lxxx/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_vp41ckv9/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_eyk5s_p7/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_vkugr7rc/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_42wm7l5h/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_ktcn8_2i/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_6ra1ia4r/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_g9xadjao/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_331xmiex/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_u0drszbw/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_cyr6kgyf/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_wo6uzsri/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_gocaqexd/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_5sxoxq9i/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_xs2rljw0/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_a82u56sy/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_p0_soqpg/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_lpntfskz/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_dq2jmb5i/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_0r765tm8/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_npyu45ol/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_aq8aapfs/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_wx7czezw/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_felvb0gu/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_rnjb1_vc/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_s0uz8qy2/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_9_fi2yhe/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_h9s37vvy/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_1igfy0wt/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_s7n6ur2d/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_nikqcp_z/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_p8pkkzzp/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_mi1c22qs/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_v1xrqa_9/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_i8fzb1m5/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_zoix6z8y/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_x2z3ateb/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/program_sbx/sbx_9wpy9jyf/in/app.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP"
-    ],
-    [
-      "repo_snapshot/server/boot.py",
-      "APP"
-    ],
-    [
-      "repo_snapshot/server/boot_strict.py",
-      "APP"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "APP"
-    ],
-    [
-      "repo_snapshot/attic/api/http_api.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/services/artifact_server.py",
-      "app"
-    ],
-    [
-      "repo_snapshot/services/api/app.py",
-      "app"
     ]
   ],
   "include_router_calls": [
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "chat_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "consent_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "respond_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "program_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "orchestrate_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "prebuild_router"
-    ],
-    [
-      "main_snapshot/server/bootstrap.py",
-      "APP",
-      "cache_router"
-    ],
-    [
-      "main_snapshot/server/boot.py",
-      "APP",
-      "router"
-    ],
-    [
-      "main_snapshot/server/boot_strict.py",
-      "APP",
-      "chat_api_router"
-    ],
-    [
-      "main_snapshot/server/boot_strict.py",
-      "APP",
-      "r"
-    ],
-    [
-      "main_snapshot/server/boot_strict.py",
-      "APP",
-      "r2"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "scheduler_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "orchestrate_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "program_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "chat_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "emergency_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "cp_deploy_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "helm_synth_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "k8s_synth_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "synth_presets_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "synth_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "jobs_metrics_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "gh_status_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "auto_canary_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "canary_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "merge_guard_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "gatekeeper_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "webhooks_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "policy_edit_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "gh_checks_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "guard_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "gitops_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "replay_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "unified_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "bundles_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "archive_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "key_admin_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "prov_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "metrics_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "supply_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "events_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "sc_index_router"
-    ],
-    [
-      "main_snapshot/server/http_api.py",
-      "APP",
-      "runbook_router"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "app",
-      "ws_router"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "APP",
-      "consent_router"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "APP",
-      "respond_router"
-    ],
-    [
-      "main_snapshot/server/main.py",
-      "APP",
-      "program_router"
-    ],
     [
       "server/bootstrap.py",
       "APP",
@@ -1018,6 +528,66 @@
       "runbook_router"
     ],
     [
+      "server/http_api.py",
+      "APP",
+      "user_memory_api.router"
+    ],
+    [
+      "server/app_admin.py",
+      "APP",
+      "r"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "chat_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "respond_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "orchestrate_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "program_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "build_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "prebuild_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "cache_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "consent_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "adapters_secure_router"
+    ],
+    [
+      "server/app_public.py",
+      "APP",
+      "health_router"
+    ],
+    [
       "server/main.py",
       "app",
       "ws_router"
@@ -1046,260 +616,16 @@
       ".venv/lib/python3.10/site-packages/fastapi/applications.py",
       "self.router",
       "router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "chat_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "consent_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "respond_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "program_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "orchestrate_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "prebuild_router"
-    ],
-    [
-      "repo_snapshot/server/bootstrap.py",
-      "APP",
-      "cache_router"
-    ],
-    [
-      "repo_snapshot/server/boot.py",
-      "APP",
-      "router"
-    ],
-    [
-      "repo_snapshot/server/boot_strict.py",
-      "APP",
-      "chat_api_router"
-    ],
-    [
-      "repo_snapshot/server/boot_strict.py",
-      "APP",
-      "r"
-    ],
-    [
-      "repo_snapshot/server/boot_strict.py",
-      "APP",
-      "r2"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "scheduler_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "orchestrate_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "program_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "chat_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "emergency_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "cp_deploy_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "helm_synth_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "k8s_synth_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "synth_presets_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "synth_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "jobs_metrics_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "gh_status_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "auto_canary_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "canary_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "merge_guard_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "gatekeeper_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "webhooks_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "policy_edit_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "gh_checks_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "guard_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "gitops_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "replay_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "unified_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "bundles_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "archive_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "key_admin_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "prov_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "metrics_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "supply_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "events_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "sc_index_router"
-    ],
-    [
-      "repo_snapshot/server/http_api.py",
-      "APP",
-      "runbook_router"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "app",
-      "ws_router"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "APP",
-      "consent_router"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "APP",
-      "adapters_secure_router"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "APP",
-      "respond_router"
-    ],
-    [
-      "repo_snapshot/server/main.py",
-      "APP",
-      "program_router"
     ]
   ],
   "blueprint_registry": {
-    "error": "attempted relative import with no known parent package"
+    "generic_backend": "engine.blueprints.generic_backend.generate_backend",
+    "api": "engine.blueprints.generic_backend.generate_backend",
+    "custom": "engine.blueprints.generic_backend.generate_backend",
+    "iac.terraform": "engine.blueprints.iac_terraform.generate",
+    "ci.github_actions": "engine.blueprints.ci_github_actions.generate",
+    "market.scan": "engine.blueprints.market_scan.generate",
+    "api_resolves_to": "engine.blueprints.generic_backend.generate_backend"
   },
   "builder": {
     "exists": true,
@@ -1325,76 +651,11 @@
   ],
   "grep_flask_like": [
     "tools/imu_doctor.py",
-    "main_snapshot/program/orchestrator.py",
     ".venv/lib/python3.10/site-packages/opentelemetry/instrumentation/asgi/__init__.py",
-    "program/orchestrator.py",
-    "repo_snapshot/program/orchestrator.py"
+    "program/orchestrator.py"
   ],
   "grep_fastapi_like": [
     "tools/imu_doctor.py",
-    "main_snapshot/program_sbx/sbx_vp41ckv9/in/app.py",
-    "main_snapshot/program_sbx/sbx_vkugr7rc/in/app.py",
-    "main_snapshot/program_sbx/sbx_ktcn8_2i/in/app.py",
-    "main_snapshot/program_sbx/sbx_6ra1ia4r/in/app.py",
-    "main_snapshot/program_sbx/sbx_5sxoxq9i/in/app.py",
-    "main_snapshot/program_sbx/sbx_npyu45ol/in/app.py",
-    "main_snapshot/program_sbx/sbx_s0uz8qy2/in/app.py",
-    "main_snapshot/program_sbx/sbx_1igfy0wt/in/app.py",
-    "main_snapshot/program_sbx/sbx_nikqcp_z/in/app.py",
-    "main_snapshot/program_sbx/sbx_i8fzb1m5/in/app.py",
-    "main_snapshot/program_sbx/sbx_zoix6z8y/in/app.py",
-    "main_snapshot/program_sbx/sbx_x2z3ateb/in/app.py",
-    "main_snapshot/server/bootstrap.py",
-    "main_snapshot/server/gitops_api.py",
-    "main_snapshot/server/emergency_api.py",
-    "main_snapshot/server/synth_adapter_api.py",
-    "main_snapshot/server/gitops_checks_api.py",
-    "main_snapshot/server/canary_auto_api.py",
-    "main_snapshot/server/merge_guard_api.py",
-    "main_snapshot/server/canary_controller.py",
-    "main_snapshot/server/policy_edit_api.py",
-    "main_snapshot/server/gh_status_api.py",
-    "main_snapshot/server/controlplane_deploy_api.py",
-    "main_snapshot/server/synth_presets_api.py",
-    "main_snapshot/server/boot.py",
-    "main_snapshot/server/boot_strict.py",
-    "main_snapshot/server/unified_archive_api.py",
-    "main_snapshot/server/provenance_api.py",
-    "main_snapshot/server/replay_api.py",
-    "main_snapshot/server/metrics_api.py",
-    "main_snapshot/server/http_api.py",
-    "main_snapshot/server/k8s_template_synth_api.py",
-    "main_snapshot/server/ws.py",
-    "main_snapshot/server/bundles_api.py",
-    "main_snapshot/server/supplychain_index_api.py",
-    "main_snapshot/server/stream_gateway.py",
-    "main_snapshot/server/key_admin_api.py",
-    "main_snapshot/server/archive_api.py",
-    "main_snapshot/server/helm_template_synth_api.py",
-    "main_snapshot/server/webhooks_api.py",
-    "main_snapshot/server/gitops_guard_api.py",
-    "main_snapshot/server/metrics_jobs_api.py",
-    "main_snapshot/server/supplychain_api.py",
-    "main_snapshot/server/runbook_api.py",
-    "main_snapshot/server/main.py",
-    "main_snapshot/server/gatekeeper_api.py",
-    "main_snapshot/server/scheduler_api.py",
-    "main_snapshot/server/routers/consent_api.py",
-    "main_snapshot/server/routers/llm_api.py",
-    "main_snapshot/server/routers/adapters_secure.py",
-    "main_snapshot/server/routers/build_api.py",
-    "main_snapshot/server/routers/prebuild_api.py",
-    "main_snapshot/server/routers/respond_api.py",
-    "main_snapshot/server/routers/chat_api.py",
-    "main_snapshot/server/routers/orchestrate_api.py",
-    "main_snapshot/server/routers/program_api.py",
-    "main_snapshot/server/routers/cache_api.py",
-    "main_snapshot/attic/api/http_api.py",
-    "main_snapshot/engine/blueprints/generic_backend.py",
-    "main_snapshot/engine/orchestrator/universal_orchestrator.py",
-    "main_snapshot/services/artifact_server.py",
-    "main_snapshot/services/api/app.py",
-    "main_snapshot/policy/rbac.py",
     "out/services/api/app.py",
     "program_sbx/sbx_t7r6lvl5/in/app.py",
     "program_sbx/sbx_to32lxxx/in/app.py",
@@ -1462,8 +723,10 @@
     "server/key_admin_api.py",
     "server/archive_api.py",
     "server/helm_template_synth_api.py",
+    "server/app_admin.py",
     "server/webhooks_api.py",
     "server/gitops_guard_api.py",
+    "server/app_public.py",
     "server/metrics_jobs_api.py",
     "server/supplychain_api.py",
     "server/runbook_api.py",
@@ -1471,6 +734,7 @@
     "server/gatekeeper_api.py",
     "server/scheduler_api.py",
     "server/routers/consent_api.py",
+    "server/routers/health_api.py",
     "server/routers/llm_api.py",
     "server/routers/adapters_secure.py",
     "server/routers/build_api.py",
@@ -1478,8 +742,13 @@
     "server/routers/respond_api.py",
     "server/routers/chat_api.py",
     "server/routers/orchestrate_api.py",
+    "server/routers/user_memory_api.py",
     "server/routers/program_api.py",
     "server/routers/cache_api.py",
+    "server/middleware/evidence.py",
+    "server/deps/admin_auth.py",
+    "server/deps/evidence_gate.py",
+    "server/deps/sandbox.py",
     "attic/api/http_api.py",
     ".venv/lib/python3.10/site-packages/opentelemetry/instrumentation/fastapi/__init__.py",
     ".venv/lib/python3.10/site-packages/fastapi/applications.py",
@@ -1494,6 +763,7 @@
     ".venv/lib/python3.10/site-packages/fastapi/security/http.py",
     ".venv/lib/python3.10/site-packages/fastapi/dependencies/utils.py",
     ".venv/lib/python3.10/site-packages/fastapi/openapi/utils.py",
+    ".imu/artifacts/app/9af93b8c236a20d3538086e7f1605bfc5ad9d8e10e1e5ea2510c61d1e3c48162/services/api/app.py",
     ".imu/artifacts/app/b9e879ea82b1ccb3f3070f707045276d552fba21cf2c9ba49cb759f055ee9e64/services/api/app.py",
     ".imu/artifacts/app/d3c2008bbf86e18338a34e85b0ee228ef05a693e0161ef24391d1c19ef2303ae/services/api/app.py",
     ".imu/artifacts/app/3d0139ab0bf1572765477f27bed23f087509c1b832e8c915dae3c10e02916c37/services/api/app.py",
@@ -1502,6 +772,11 @@
     ".imu/artifacts/app/d0be015a73a0d90b34cff8816f7ad5fd626831fd9cab7fd305e2ee3daf8c07ae/services/api/app.py",
     ".imu/artifacts/app/3c7990afe939ea519ee56396fd4a53e28ca473dcadc8c28fc2185eb29e9dfdbb/services/api/app.py",
     ".imu/artifacts/app/f770753ac819ee82ed2773ba49b2aa009211bae4b17ddca331bff3637484acff/services/api/app.py",
+    ".imu/artifacts/build-api_glue/d0db0c9595db4d09fcd3924191a54720362127e95b4c3bf7d44ddfe97e0fc368/services/api/app.py",
+    ".imu/artifacts/build-api_glue/f854156029b6ff27a038c36015f1275bded1c7d8235137e96de487887c9ca57a/services/api/app.py",
+    ".imu/artifacts/Minimal API/d0db0c9595db4d09fcd3924191a54720362127e95b4c3bf7d44ddfe97e0fc368/services/api/app.py",
+    ".imu/artifacts/Minimal API/f854156029b6ff27a038c36015f1275bded1c7d8235137e96de487887c9ca57a/services/api/app.py",
+    ".imu/artifacts/build-custom_glue/9af93b8c236a20d3538086e7f1605bfc5ad9d8e10e1e5ea2510c61d1e3c48162/services/api/app.py",
     ".imu/artifacts/build-custom_glue/b9e879ea82b1ccb3f3070f707045276d552fba21cf2c9ba49cb759f055ee9e64/services/api/app.py",
     ".imu/artifacts/build-custom_glue/d3c2008bbf86e18338a34e85b0ee228ef05a693e0161ef24391d1c19ef2303ae/services/api/app.py",
     ".imu/artifacts/build-custom_glue/3d0139ab0bf1572765477f27bed23f087509c1b832e8c915dae3c10e02916c37/services/api/app.py",
@@ -1510,102 +785,13 @@
     ".imu/artifacts/build-custom_glue/d0be015a73a0d90b34cff8816f7ad5fd626831fd9cab7fd305e2ee3daf8c07ae/services/api/app.py",
     ".imu/artifacts/build-custom_glue/3c7990afe939ea519ee56396fd4a53e28ca473dcadc8c28fc2185eb29e9dfdbb/services/api/app.py",
     ".imu/artifacts/build-custom_glue/f770753ac819ee82ed2773ba49b2aa009211bae4b17ddca331bff3637484acff/services/api/app.py",
+    ".imu/runs/1757605012_3264d1df33f9480d8f3efd956591bfb1_u1/services/api/app.py",
+    ".imu/runs/1757604607_ad4ffbbc6c2a4c41b9a6a9eaf223fb2e_u1/services/api/app.py",
     "engine/blueprints/generic_backend.py",
     "engine/blueprints/backend_sqlmodel.py",
     "engine/orchestrator/universal_orchestrator.py",
     "services/artifact_server.py",
     "services/api/app.py",
-    "policy/rbac.py",
-    "repo_snapshot/program_sbx/sbx_t7r6lvl5/in/app.py",
-    "repo_snapshot/program_sbx/sbx_to32lxxx/in/app.py",
-    "repo_snapshot/program_sbx/sbx_vp41ckv9/in/app.py",
-    "repo_snapshot/program_sbx/sbx_eyk5s_p7/in/app.py",
-    "repo_snapshot/program_sbx/sbx_vkugr7rc/in/app.py",
-    "repo_snapshot/program_sbx/sbx_42wm7l5h/in/app.py",
-    "repo_snapshot/program_sbx/sbx_ktcn8_2i/in/app.py",
-    "repo_snapshot/program_sbx/sbx_6ra1ia4r/in/app.py",
-    "repo_snapshot/program_sbx/sbx_g9xadjao/in/app.py",
-    "repo_snapshot/program_sbx/sbx_331xmiex/in/app.py",
-    "repo_snapshot/program_sbx/sbx_u0drszbw/in/app.py",
-    "repo_snapshot/program_sbx/sbx_cyr6kgyf/in/app.py",
-    "repo_snapshot/program_sbx/sbx_wo6uzsri/in/app.py",
-    "repo_snapshot/program_sbx/sbx_gocaqexd/in/app.py",
-    "repo_snapshot/program_sbx/sbx_5sxoxq9i/in/app.py",
-    "repo_snapshot/program_sbx/sbx_xs2rljw0/in/app.py",
-    "repo_snapshot/program_sbx/sbx_a82u56sy/in/app.py",
-    "repo_snapshot/program_sbx/sbx_p0_soqpg/in/app.py",
-    "repo_snapshot/program_sbx/sbx_lpntfskz/in/app.py",
-    "repo_snapshot/program_sbx/sbx_dq2jmb5i/in/app.py",
-    "repo_snapshot/program_sbx/sbx_0r765tm8/in/app.py",
-    "repo_snapshot/program_sbx/sbx_npyu45ol/in/app.py",
-    "repo_snapshot/program_sbx/sbx_aq8aapfs/in/app.py",
-    "repo_snapshot/program_sbx/sbx_wx7czezw/in/app.py",
-    "repo_snapshot/program_sbx/sbx_felvb0gu/in/app.py",
-    "repo_snapshot/program_sbx/sbx_rnjb1_vc/in/app.py",
-    "repo_snapshot/program_sbx/sbx_s0uz8qy2/in/app.py",
-    "repo_snapshot/program_sbx/sbx_9_fi2yhe/in/app.py",
-    "repo_snapshot/program_sbx/sbx_h9s37vvy/in/app.py",
-    "repo_snapshot/program_sbx/sbx_1igfy0wt/in/app.py",
-    "repo_snapshot/program_sbx/sbx_s7n6ur2d/in/app.py",
-    "repo_snapshot/program_sbx/sbx_nikqcp_z/in/app.py",
-    "repo_snapshot/program_sbx/sbx_p8pkkzzp/in/app.py",
-    "repo_snapshot/program_sbx/sbx_mi1c22qs/in/app.py",
-    "repo_snapshot/program_sbx/sbx_v1xrqa_9/in/app.py",
-    "repo_snapshot/program_sbx/sbx_i8fzb1m5/in/app.py",
-    "repo_snapshot/program_sbx/sbx_zoix6z8y/in/app.py",
-    "repo_snapshot/program_sbx/sbx_x2z3ateb/in/app.py",
-    "repo_snapshot/program_sbx/sbx_9wpy9jyf/in/app.py",
-    "repo_snapshot/server/bootstrap.py",
-    "repo_snapshot/server/gitops_api.py",
-    "repo_snapshot/server/emergency_api.py",
-    "repo_snapshot/server/synth_adapter_api.py",
-    "repo_snapshot/server/gitops_checks_api.py",
-    "repo_snapshot/server/canary_auto_api.py",
-    "repo_snapshot/server/merge_guard_api.py",
-    "repo_snapshot/server/canary_controller.py",
-    "repo_snapshot/server/policy_edit_api.py",
-    "repo_snapshot/server/gh_status_api.py",
-    "repo_snapshot/server/controlplane_deploy_api.py",
-    "repo_snapshot/server/synth_presets_api.py",
-    "repo_snapshot/server/boot.py",
-    "repo_snapshot/server/boot_strict.py",
-    "repo_snapshot/server/unified_archive_api.py",
-    "repo_snapshot/server/provenance_api.py",
-    "repo_snapshot/server/replay_api.py",
-    "repo_snapshot/server/metrics_api.py",
-    "repo_snapshot/server/http_api.py",
-    "repo_snapshot/server/k8s_template_synth_api.py",
-    "repo_snapshot/server/ws.py",
-    "repo_snapshot/server/bundles_api.py",
-    "repo_snapshot/server/supplychain_index_api.py",
-    "repo_snapshot/server/stream_gateway.py",
-    "repo_snapshot/server/key_admin_api.py",
-    "repo_snapshot/server/archive_api.py",
-    "repo_snapshot/server/helm_template_synth_api.py",
-    "repo_snapshot/server/webhooks_api.py",
-    "repo_snapshot/server/gitops_guard_api.py",
-    "repo_snapshot/server/metrics_jobs_api.py",
-    "repo_snapshot/server/supplychain_api.py",
-    "repo_snapshot/server/runbook_api.py",
-    "repo_snapshot/server/main.py",
-    "repo_snapshot/server/gatekeeper_api.py",
-    "repo_snapshot/server/scheduler_api.py",
-    "repo_snapshot/server/routers/consent_api.py",
-    "repo_snapshot/server/routers/llm_api.py",
-    "repo_snapshot/server/routers/adapters_secure.py",
-    "repo_snapshot/server/routers/build_api.py",
-    "repo_snapshot/server/routers/prebuild_api.py",
-    "repo_snapshot/server/routers/respond_api.py",
-    "repo_snapshot/server/routers/chat_api.py",
-    "repo_snapshot/server/routers/orchestrate_api.py",
-    "repo_snapshot/server/routers/program_api.py",
-    "repo_snapshot/server/routers/cache_api.py",
-    "repo_snapshot/attic/api/http_api.py",
-    "repo_snapshot/engine/blueprints/generic_backend.py",
-    "repo_snapshot/engine/blueprints/backend_sqlmodel.py",
-    "repo_snapshot/engine/orchestrator/universal_orchestrator.py",
-    "repo_snapshot/services/artifact_server.py",
-    "repo_snapshot/services/api/app.py",
-    "repo_snapshot/policy/rbac.py"
+    "policy/rbac.py"
   ]
 }

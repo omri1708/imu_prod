@@ -1,6 +1,0 @@
-{
-  "kind": "infra.ansible.apply",
-  "templates": {
-    "any": "ansible-playbook -i {inventory} {playbook}{tags_opt}{extra_opt}"
-  }
-}

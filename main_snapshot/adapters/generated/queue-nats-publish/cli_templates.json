@@ -1,6 +1,0 @@
-{
-  "kind": "queue.nats.publish",
-  "templates": {
-    "any": "nats pub {subject} \"{message}\" --server {server}{creds_opt}{tls_opt}"
-  }
-}

@@ -1,6 +1,0 @@
-{
-  "kind": "infra.ansible.galaxy",
-  "templates": {
-    "any": "ansible-galaxy install -r {requirements} -p {dest}{server_opt}{token_opt}{extra_opt}"
-  }
-}

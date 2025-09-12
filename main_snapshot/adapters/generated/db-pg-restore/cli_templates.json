@@ -1,6 +1,0 @@
-{
-  "kind": "db.pg.restore",
-  "templates": {
-    "any": "pg_restore -d {db_url}{clean_opt}{ifexists_opt}{jobs_opt}{extra_opt} {in}"
-  }
-}

@@ -400,6 +400,7 @@ class LLMGateway:
         intent: str,
         schema_hint: Optional[str] = None,
         prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, str]]] = None,
         *,
         content: Optional[Dict[str, Any]] = None,
         temperature: float = 0.0,
@@ -417,8 +418,10 @@ class LLMGateway:
         persona = self._persona(user_id)
         if content is None:
             content = {"prompt": prompt or "", "schema_hint": schema_hint or "{}", "context": {}}
-        msgs = self.pb.compose(user_id=user_id, task=task, intent=intent, persona=persona, content=content, json_only=True)
-
+        msgs = messages or self.pb.compose(
+            user_id=user_id, task=task, intent=intent,
+            persona=persona, content=content, json_only=True
+        )
         # --- real model calls or local fallback ---
         raw = ""
         if _HAS_OPENAI:

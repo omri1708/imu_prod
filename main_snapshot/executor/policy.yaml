@@ -1,9 +1,0 @@
-strict_fs: false        # אין bwrap/macOS
-no_net: true            # בלי רשת בזמן build ברירת מחדל
-cpu_seconds: 30
-mem_mb: 512
-allow_exec:
-  - python
-  - pytest
-allow_write:
-  - "."

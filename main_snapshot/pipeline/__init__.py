@@ -1,1 +1,0 @@
-"""Synthesis pipeline (plan→generate→test→verify→package)."""

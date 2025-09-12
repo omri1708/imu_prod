@@ -1,6 +1,0 @@
-{
-  "kind": "helm.template",
-  "templates": {
-    "any": "helm template {name} {chart_dir} -f {values_file}"
-  }
-}

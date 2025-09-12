@@ -1,6 +1,0 @@
-{
-  "kind": "db.pg.backup",
-  "templates": {
-    "any": "pg_dump -d {db_url} -F {format} -f {out}{schema_opt}{owner_opt}{jobs_opt}"
-  }
-}

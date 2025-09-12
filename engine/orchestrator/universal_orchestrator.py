@@ -1,4 +1,4 @@
-# PATH: engine/orchestrator/universal_orchestrator.py
+# engine/orchestrator/universal_orchestrator.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os
@@ -314,7 +314,7 @@ class UniversalOrchestrator:
         if mode == "poc":
             files = _synthesize_poc_files(spec)
             t0 = time.time()
-            build = await self.builder.build_python_module(files, name=(domain + "_poc"))
+            build = await self.builder.build_python_module(files, name=(domain + "_poc"), workdir=workdir)
             latency = int((time.time() - t0) * 1000)
             ok = bool(build.get("ok", False))
             try:

@@ -1,6 +1,0 @@
-{
-  "kind": "helm.rollback",
-  "templates": {
-    "any": "helm rollback {release} {revision} -n {namespace}"
-  }
-}

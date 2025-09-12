@@ -1,1 +1,0 @@
-"""UI adapters (Web, Desktop, Mobile, Game)."""

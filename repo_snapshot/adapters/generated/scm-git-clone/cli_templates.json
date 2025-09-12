@@ -1,6 +1,0 @@
-{
-  "kind": "scm.git.clone",
-  "templates": {
-    "any": "git clone {repo} {dest}{branch_opt}{depth_opt}"
-  }
-}

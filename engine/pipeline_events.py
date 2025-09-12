@@ -10,24 +10,37 @@ from synth.specs_adapter import parse_adapter_jobs
 from engine.contracts_gate import enforce_respond_contract
 import time, random
 from audit.merkle_log import MerkleAudit
+from engine.telemetry.audit import emit_event
 
+AUDIT = None  # DEPRECATED: per-run audit is handled via engine.telemetry.audit.emit_event(ctx, ...)
 
-AUDIT = AppendOnlyAudit("var/audit/pipeline.jsonl")
+AUDIT_MERKLE = None  # DEPRECATED: use engine.telemetry.audit.emit_event(ctx, ...)
+ 
 
-AUDIT_MERKLE = MerkleAudit("var/audit/pipeline")
-
-def emit_progress(pct: float):
+def emit_progress(pct: float, ctx: Dict[str,Any] | None = None):
     broker.publish("progress", {"ts": time.time(), "value": float(pct)}, priority="logic")
-    AUDIT_MERKLE.append("progress", {"value": float(pct)})
-
-def emit_timeline(kind: str, msg: str):
+    try:
+        emit_event(ctx, "progress", value=float(pct))
+    except Exception:
+        pass
+ 
+def emit_timeline(kind: str, msg: str, ctx: Dict[str,Any] | None = None):
     broker.publish("timeline", {"ts": time.time(), "kind": kind, "msg": msg}, priority="telemetry")
-    AUDIT_MERKLE.append("timeline", {"kind": kind, "msg": msg})
-
+    try:
+        emit_event(ctx, "timeline", kind=kind, msg=msg)
+    except Exception:
+        pass
 def _emit(topic: str, event: dict, *, priority: int = 1):
     ok = broker.publish(topic, event, priority=priority)
-    AUDIT.append({"topic":topic, "delivered":ok, "event":event})
-    AUDIT_MERKLE.append(topic, {**event, "delivered": ok})   
+    # route audit to per-run file when possible
+    ctx = {}
+    if isinstance(event, dict):
+        if "audit_path" in event: ctx["audit_path"] = event["audit_path"]
+        if "run_id" in event: ctx["run_id"] = event["run_id"]
+    try:
+        emit_event(ctx or None, topic, delivered=ok, **(event or {}))
+    except Exception:
+        pass
     
 def run_pipeline_spec(*, user: str, spec_text: str, policy, ev_index) -> str:
     """
