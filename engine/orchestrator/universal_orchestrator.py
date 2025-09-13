@@ -314,7 +314,7 @@ class UniversalOrchestrator:
         if mode == "poc":
             files = _synthesize_poc_files(spec)
             t0 = time.time()
-            build = await self.builder.build_python_module(files, name=(domain + "_poc"), workdir=workdir)
+            build = await self.builder.build_python_module(files, name=(domain + "_poc"), persist_dir=workdir)
             latency = int((time.time() - t0) * 1000)
             ok = bool(build.get("ok", False))
             try:
@@ -415,7 +415,7 @@ class UniversalOrchestrator:
         # 4) build
         t0 = time.time()
         try:
-            build = await self.builder.build_python_module(files, name=(domain + "_glue"), workdir=workdir)  # חדש
+            build = await self.builder.build_python_module(files, name=(domain + "_glue"), persist_dir=workdir)  # חדש
         except TypeError:
             build = await self.builder.build_python_module(files, name=(domain + "_glue"))  # תאימות
         latency = int((time.time() - t0) * 1000)

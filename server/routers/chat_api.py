@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import os 
 import json
+import time 
 from typing import Dict, Any, Optional, List
 import traceback
 from fastapi import APIRouter, HTTPException, Query, Depends, Body, Form
@@ -13,7 +14,6 @@ from engine.orchestrator import universal_planner as up
 from engine.spec_refiner import SpecRefiner
 from server.dialog.state import SessionState
 from server.dialog.memory_bridge import MB
-from server.deps.evidence_gate import require_citations_or_silence
 from engine.orchestrator.run_store import run_context
 from server.dialog.intent_router import classify_intent
 from engine.orchestrator.universal_orchestrator import UniversalOrchestrator
@@ -33,9 +33,19 @@ from engine.runtime.approvals import required_approvals
 from engine.blueprints.registry import resolve as resolve_blueprint
 from pathlib import Path
 from engine.runtime.consent_store import ConsentStore
+# בראש הקובץ (הוספה):
+from engine.memory.store import load_recent, load_summary, append_turn, summarize_if_needed
+
+THREAD_DEFAULT = "default"
+WINDOW_N = int(os.getenv("IMU_CONV_WINDOW_N", "12"))
 
 CONS = ConsentStore(".imu/consents.json")
 
+# --- Heuristic: text that clearly asks to build (Heb/Eng) ---
+def _looks_like_build(text: str) -> bool:
+    t = (text or "").strip().lower()
+    # עברית: "בנה", "תבנה", "תייצר", "סנתז"
+    return any(k in t for k in ("בנה", "תבנה", "תייצר", "סנתז", "generate", "build", "create", "scaffold"))
 # =====================================================
 #  Chat API Router — Conversation + Grounding + Build
 # =====================================================
@@ -47,7 +57,7 @@ router = APIRouter(
 
 US = UserStore("./assurance_store_users")
 UM = UserModel(US)
-UNIV = UniversalOrchestrator()
+
 
 # --- Global runtime singletons (שימוש־חוזר) ---
 SESS: Dict[str, SessionState] = {}
@@ -68,6 +78,35 @@ def diagnostics(user_id: str = "user"):
     """Return LLM readiness for clear root-cause."""
     return {"ok": True, "llm": GW.diagnose()}
 # ------------------------- Utilities -------------------------
+
+def _build_messages(user_id: str, thread_id: str, user_text: str) -> list[dict]:
+    summ = load_summary(user_id, thread_id)
+    hist = load_recent(user_id, thread_id, n=WINDOW_N)
+
+    system_persona = (
+      "אתה IMU Assistant. דבר בטון מקצועי-ידידותי. "
+      "היצמד לעובדות ידועות ולטקסט שסופק בהקשר. "
+      "אם חסר מידע קריטי – שאל עד 2 שאלות ממוקדות ואז המשך."
+    )
+    system_contract = (
+      "Context contract:\n"
+      f"- Summary: {summ.get('summary','')}\n"
+      f"- Decisions: {', '.join(summ.get('decisions',[]))}\n"
+      f"- Open Qs: {', '.join(summ.get('open_questions',[]))}\n"
+      "פעל ברצף מול המשתמש על סמך הסיכום וההחלטות."
+    )
+
+    msgs = [{"role":"system","content": system_persona},
+            {"role":"system","content": system_contract}]
+
+    for h in hist:
+        role = h.get("role","user")
+        text = h.get("text","")
+        msgs.append({"role": role, "content": text})
+
+    msgs.append({"role":"user","content": user_text})
+    return msgs
+
 
 def _auto_assets(uid: str, spec: Dict[str,Any], ctx: Dict[str,Any], user_msg: str) -> List[Dict[str,Any]]:
     """
@@ -180,6 +219,8 @@ async def send(body: Dict[str, Any]):
     st = SESS.setdefault(uid, SessionState())
     MB.observe_turn(uid, "user", msg)
     SUBJECT.observe_text(uid, msg)
+    # messages history model (גם אם ה־Gateway יתעלם, אין נזק)
+    messages = _build_messages(uid, THREAD_DEFAULT, msg)
 
     # ריכוז קונטקסט מרלוונטי (T0/T1/T2) + פרסונה
     ignore_memory  = bool(body.get("ignore_memory", False))
@@ -212,15 +253,16 @@ async def send(body: Dict[str, Any]):
     # 2) מסלול מידע (Grounded-only)
     if intent == "knowledge":
         if not sources and route.get("needs_sources"):
-            return _say(uid, st, "כדי לענות בלי הלוצינציות צריך קישורים/מקורות.")
-        prompt = _sanitize_prompt(msg) or "ענה בקצרה על בסיס המקורות"
+            return _say(uid, st, "כדי לענות בלי הלוצינציות צריך קישורים/מקורות.", extra={"intent": route})
+        prompt = _sanitize_prompt(msg) or "ענה בקצרה על בסיס המקורות."
         out = GW.chat(user_id=uid, task="answer", intent="answer",
                     content={"prompt": prompt, "sources": sources, "context": ctx},
                     require_grounding=True, temperature=float(body.get("temperature", 0.0)))
         if not out.get("ok"):
             raise HTTPException(400, f"grounded-answer-refused: {out.get('error') or 'not_grounded'}")
         payload = out["payload"]
-        return _say(uid, st, payload["text"], extra={"citations": payload.get("citations"), "grounded": True})
+        return _say(uid, st, payload["text"], extra={"citations": payload.get("citations"),
+                                                     "grounded": True, "intent": route, "build": None, "persist_dir": None})
 
     # 3) מסלול שיחה (כשאין ביטחון בבנייה/ידע)
     if intent == "talk" or conf < 0.45:
@@ -240,7 +282,7 @@ async def send(body: Dict[str, Any]):
             st.stage = "slot_fill"
             st.missing = ef["missing"]
             st.slots = ef["values"]
-            return _say(uid, st, q, extra={"missing": ef["missing"]})
+            return _say(uid, st, q, extra={"missing": ef["missing"], "intent": route, "build": None, "persist_dir": None})
 
 
         # ======================================
@@ -308,6 +350,8 @@ async def send(body: Dict[str, Any]):
             "next": {"type": "questions", "items": open_q[:10]},
             "spec": spec_refined,
             "analysis": analysis,
+            "intent": route,
+            "build": None, "persist_dir": None
         })
 
     # --- Approvals & Secrets gate (לפני build) ---
@@ -336,8 +380,9 @@ async def send(body: Dict[str, Any]):
                 "secrets": missing_secrets,
                 "notes": req.get("notes") or [],
             },
-            "hint": "קרא ל־POST /chat/consent כדי לאשר התקנות/להזין סודות ולהמשיך."
-        }
+            "hint": "קרא ל־POST /chat/consent כדי לאשר התקנות/להזין סודות ולהמשיך.",
+            "intent": route
+         }
 
     # אפשר להפעיל Auto-install לפי דגל זיכרון (לא חובה)
     if CONS.get_flag(uid, "auto_install"):
@@ -350,35 +395,62 @@ async def send(body: Dict[str, Any]):
         decide = classify_intent(uid, msg, ctx) or {}
     except Exception:
         decide = {}
-    want_build = (
-        bool(body.get("force_build")) or
-        ((decide.get("intent") == "build") and float(decide.get("confidence", 0.0)) >= build_threshold)
-    )
+    want_build = bool(body.get("force_build") or body.get("autobuild")) \
+                 or _looks_like_build(msg) \
+                 or ((decide.get("intent") == "build") and float(decide.get("confidence", 0.0)) >= build_threshold)
+
     if want_build:
-        # לנתח → להריץ בתוך run_context אטומי, עם persist_dir/audit per-run
+        # 5.1 Run: בתוך run_context אטומי, עם persist_dir/audit per-run
         with run_context(user=uid) as run:
             audit_dir = Path(run.path) / "audit"
             audit_dir.mkdir(parents=True, exist_ok=True)
             ctx["run_id"] = run.id
             ctx["run_dir"] = run.path
             ctx["audit_path"] = str(audit_dir / "pipeline.jsonl")
-            spec = UNIV.analyze(uid, msg, ctx)
-            res  = await UNIV.execute(spec, workdir=run.path)
+            res = await ORC.execute(spec_refined, workdir=run.path)
+
+        # 5.2 Autopilot תיקון כשלי build (אופציונלי)
+        AUTOPILOT = True
+        max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
+        attempt = 0
+        while AUTOPILOT and not res.get("ok") and attempt < max_attempts:
+            attempt += 1
+            co = (res.get("build",{}) or {}).get("compile_out","") or (res.get("build",{}) or {}).get("test_out","")
+            if not co:
+                break
+            rc = parse_traceback(co)
+            files_map = (res.get("build",{}) or {}).get("inputs") or {}
+            apply_actions(rc.get("actions", []), files=files_map)
+            res = await ORC.execute(spec_refined, workdir=ctx["run_dir"])
+        ctx.setdefault("__diagnostics__",{}).setdefault("autopilot",{})["attempts"] = attempt
+
+        # 5.3 Persist assets ייעודיים (אם ביקשת)
+        written = []
+        persist_dir = body.get("persist")
+        if persist_dir and isinstance(res.get("build", {}).get("inputs"), dict):
+            files_map = res["build"]["inputs"]
+            for rel, data in files_map.items():
+                p = Path(persist_dir) / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(data, str): data = data.encode("utf-8")
+                p.write_bytes(data); written.append(str(p))
+
+        # 5.4 תשובת Build אחידה
         extra = {
-            "run_id": ctx["run_id"],
-            "build": res.get("build"),
+            "mode": mode, "intent": decide or route,
+            "spec": spec_refined, "analysis": analysis,
+            **res,
+            "files_written": written,
+            "run_id": ctx.get("run_id"),
             "persist_dir": (res.get("build") or {}).get("persist_dir"),
-            "intent": decide
         }
-        return JSONResponse({
-            "ok": bool(res.get("ok", True)),
-            "text": "✅ יצאתי לבנייה. ראה persist_dir ו‑timeline.",
-            "extra": extra,
-            "run_id": extra["run_id"],
-            "build": extra["build"],
-            "persist_dir": extra["persist_dir"]
-        })
-    miss = res.get("still_missing") or []
+        text = "בנוי ✔️" if res.get("ok") else ("נדרשים כלים (ראה extra.instructions)" if res.get("still_missing") else "הבנייה נכשלה — ראה extra")
+        return JSONResponse({"ok": bool(res.get("ok", False)), "text": text, "extra": extra,
+                             "run_id": extra["run_id"], "build": res.get("build"),
+                             "persist_dir": extra["persist_dir"]})
+
+    # --- אם לא בנינו: מחזירים Preview עשיר של התכנון ---
+    miss = []  # אין res כאן; לא בוצעה בנייה
     auto = bool(body.get("auto_install") or CONS.get_flag(uid, "auto_install"))
     if miss and auto:
         try:
@@ -386,14 +458,13 @@ async def send(body: Dict[str, Any]):
             from tools.auto_install import auto_install_missing
             _ = await auto_install_missing(miss)
             # נסה שוב בנייה אחרי התקנה
-            res = await _exec_with_runctx(spec_refined)
+           # טריגר לבנייה יתבצע בקריאה הבאה עם autobuild/force_build
         except Exception:
             pass
-    elif miss and not auto:
-        # שיח לא טכני: לבקש אישור ולהמשיך
-        return _say(uid, st,
-            "נדרש אישור להתקנה/חיבור של כלים חיצוניים כדי להמשיך.",
-            extra={"needs_approvals":{"tools":miss},"hint":"שלח /chat/consent עם auto_install=true"})
+    # תשובת עיצוב/ניתוח עם הנחיה איך לבנות
+    return _say(uid, st, "תכנון מוכן. כדי לבנות שלח שוב עם autobuild=true או כתוב 'בנה'.",
+                extra={"mode": mode, "spec": spec_refined, "analysis": analysis,
+                       "intent": route, "build": None, "persist_dir": None})
     
     #from engine.self_heal.controller import self_heal_once, classify_failure
 

@@ -44,14 +44,14 @@ class Orchestrator:
         if not bk.get("ok"):
             return {"ok": False, "stage":"escalate", "attempts": bk.get("attempts")}
         user_id = ctx.get("user_id") or "anon"
-        emit_timeline("orchestrator.start", f"user={user_id}")
+        emit_timeline("orchestrator.start", f"user={user_id}", ctx=ctx)
         pre_missing = ensure_capabilities(spec, ctx)   # בונה stubs ליכולות חסרות (dry-run)
         pre_tools   = ensure_tools(spec, ctx)          # מתקין כלים עם evidence ורשיונות
         ctx.setdefault("__prebuild__", {}).update({"missing": pre_missing, "installed": pre_tools})
         # בוחרים Runner
         pick: Optional[Runner] = next((r for r in self.runners if r.accepts(spec)), None)
         if not pick:
-            emit_timeline("orchestrator.error", "no_runner_match")
+            emit_timeline("orchestrator.error", "no_runner_match", ctx=ctx)
             raise ValueError("no_runner_for_spec")
         # עטיפת Strict-Grounded per-user
         guarded = await build_user_guarded(lambda s: self._run_instrumented(pick, s, ctx), user_id=user_id)
@@ -73,7 +73,7 @@ class Orchestrator:
          # אחרי ריצה – בנה KPI מהריצה (latency/ok/cost):
         kpi = {"p95_ms": out.get("latency_ms", 1200.0), "error_rate": 0.0 if out.get("ok") else 1.0, "cost_usd": 0.0, "target_ms":1500.0}
         OPT_RUN.update(i, kpi_to_reward(kpi), context=arm["x"])
-        emit_timeline("orchestrator.done", pick.name)
+        emit_timeline("orchestrator.done", pick.name, ctx=ctx)
         from engine.recovery.backoff import clear
         if isinstance(out, dict) and out.get("ok"):
             clear(str(key))
@@ -81,16 +81,18 @@ class Orchestrator:
 
 
     async def _run_instrumented(self, runner: Runner, spec: Any, ctx: Dict[str,Any]) -> Dict[str,Any]:
-        emit_progress(0.0)
-        emit_timeline("runner.start", runner.name)
+        emit_progress(0.0, ctx=ctx)
+    
+        emit_timeline("runner.start", runner.name, ctx=ctx)
         try:
             res = runner.run(spec, ctx)
             if inspect.isawaitable(res):
                 res = await res
-            emit_progress(100.0)
+            emit_progress(100.0, ctx=ctx)
+
             return res  # כבר בתצורה הקנונית
         finally:
-            emit_timeline("runner.end", runner.name)
+            emit_timeline("runner.end", runner.name, ctx=ctx)
 
 # --------- עזרי זיהוי סוג קלט
 def _is_vm_program(x: Any) -> bool:

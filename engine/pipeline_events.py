@@ -11,32 +11,34 @@ from engine.contracts_gate import enforce_respond_contract
 import time, random
 from audit.merkle_log import MerkleAudit
 from engine.telemetry.audit import emit_event
+from typing import Optional
+from engine.telemetry.audit import get_audit_path
 
 AUDIT = None  # DEPRECATED: per-run audit is handled via engine.telemetry.audit.emit_event(ctx, ...)
 
 AUDIT_MERKLE = None  # DEPRECATED: use engine.telemetry.audit.emit_event(ctx, ...)
- 
+def _audit(ctx: Optional[Dict[str, Any]] = None):
+    p = get_audit_path(ctx)
+    return AppendOnlyAudit(str(p)), MerkleAudit(str(p).rsplit(".",1)[0])
 
-def emit_progress(pct: float, ctx: Dict[str,Any] | None = None):
-    broker.publish("progress", {"ts": time.time(), "value": float(pct)}, priority="logic")
-    try:
-        emit_event(ctx, "progress", value=float(pct))
-    except Exception:
-        pass
+def emit_progress(pct: float, *, ctx: Optional[Dict[str, Any]] = None):
+    broker.publish("progress", {"ts": time.time(), "value": float(pct), "run_id": (ctx or {}).get("run_id")}, priority="logic")
+    _, merkle = _audit(ctx); merkle.append("progress", {"value": float(pct)})
+
  
-def emit_timeline(kind: str, msg: str, ctx: Dict[str,Any] | None = None):
-    broker.publish("timeline", {"ts": time.time(), "kind": kind, "msg": msg}, priority="telemetry")
-    try:
-        emit_event(ctx, "timeline", kind=kind, msg=msg)
-    except Exception:
-        pass
+def emit_timeline(kind: str, msg: str, *, ctx: Optional[Dict[str, Any]] = None):
+    broker.publish("timeline", {"ts": time.time(), "kind": kind, "msg": msg, "run_id": (ctx or {}).get("run_id")}, priority="telemetry")
+    _, merkle = _audit(ctx); merkle.append("timeline", {"kind": kind, "msg": msg})
+
 def _emit(topic: str, event: dict, *, priority: int = 1):
     ok = broker.publish(topic, event, priority=priority)
     # route audit to per-run file when possible
     ctx = {}
     if isinstance(event, dict):
-        if "audit_path" in event: ctx["audit_path"] = event["audit_path"]
-        if "run_id" in event: ctx["run_id"] = event["run_id"]
+        if "audit_path" in event:
+            ctx["audit_path"] = event["audit_path"]
+        if "run_id" in event:
+            ctx["run_id"] = event["run_id"]
     try:
         emit_event(ctx or None, topic, delivered=ok, **(event or {}))
     except Exception:
