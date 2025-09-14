@@ -1,0 +1,28 @@
+{"ts": 1757288946883, "h": "64286e8ad75d1871fce6c1a7b08aa9d7dc01168a47d9a957e5510b8f4cdfa658", "domain": "api", "blueprint": "api", "ok": false, "tools": {"exe:npm": true, "exe:node": true, "exe:sqlite3": true}, "latency_ms": 40}
+{"ts": 1757289807801, "h": "e49826cf95b5ee42eef40c0919604aeb8023e65dd62fcaa3d52b8dfa7b3a8682", "domain": "api", "blueprint": "api", "ok": false, "tools": {"exe:npm": true, "exe:node": true, "exe:sqlite3": true}, "latency_ms": 43}
+{"ts": 1757476692001, "h": "9fc0a6977410c7efb2f5751150288178764f8d703b6025fec5971ba9f109c8e7", "domain": "api", "blueprint": "api", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 80}
+{"ts": 1757477099050, "h": "73b92dfbc1de38284e6c87964c6556e6047a86ab619e4f1ff757501b4b52ad41", "domain": "web", "blueprint": "web", "ok": false, "tools": {"exe:node": true, "exe:npm": true, "exe:sqlite3": true}, "latency_ms": 57}
+{"ts": 1757477616667, "h": "feba74ed8d9f5e52b65dc4dedc411b2cd179d5d2d1a151d864d5f1306aafc4da", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {"exe:node": true, "exe:npm": true, "exe:sqlite3": true}, "latency_ms": 58}
+{"ts": 1757521665037, "h": "1ec106e1eb58afba887ba04adcf88daa2922c31fd4a239c673e8063bcd11f994", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 52}
+{"ts": 1757522186967, "h": "1ec106e1eb58afba887ba04adcf88daa2922c31fd4a239c673e8063bcd11f994", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 32}
+{"ts": 1757522224154, "h": "dd2721655e6b4dbc44cef8093e1f715bb255573d334d3ce11eca4807cc7e12cb", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 55}
+{"ts": 1757522290984, "h": "6edf87fb535b871be0d89206b46a9214d1c101dbee406a296197548a3c78a7b4", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 42}
+{"ts": 1757522719333, "h": "e9c4e6ca2992947b99097a741c01a58adfea3d0cd4ee3d2b3c64ab8cde7fb916", "domain": "api", "blueprint": "api", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 54}
+{"ts": 1757522791141, "h": "e9c4e6ca2992947b99097a741c01a58adfea3d0cd4ee3d2b3c64ab8cde7fb916", "domain": "api", "blueprint": "api", "ok": false, "tools": {"exe:node": true, "exe:npm": true}, "latency_ms": 35}
+{"ts": 1757542347808, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": false, "tools": {}, "latency_ms": 252}
+{"ts": 1757542348002, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": false, "tools": {}, "latency_ms": 191}
+{"ts": 1757544935480, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": false, "tools": {}, "latency_ms": 359}
+{"ts": 1757544947478, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": false, "tools": {}, "latency_ms": 394}
+{"ts": 1757549520401, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 468}
+{"ts": 1757551117113, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 440}
+{"ts": 1757551660397, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 462}
+{"ts": 1757552015951, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 471}
+{"ts": 1757552174215, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 445}
+{"ts": 1757553678203, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 465}
+{"ts": 1757555538218, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {}, "latency_ms": 439}
+{"ts": 1757555538751, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": false, "tools": {}, "latency_ms": 532}
+{"ts": 1757556152929, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 445}
+{"ts": 1757559478743, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 485}
+{"ts": 1757603487740, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": true, "tools": {}, "latency_ms": 87}
+{"ts": 1757604607445, "h": "a73b8403296288bfa18d462d9d4f56b490cf711978640b6a15e383c4338a1d21", "domain": "api", "blueprint": "api", "ok": true, "tools": {}, "latency_ms": 64}
+{"ts": 1757605012596, "h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "domain": "custom", "blueprint": "custom", "ok": true, "tools": {}, "latency_ms": 67}

@@ -1,0 +1,17 @@
+{
+  "digest": "f854156029b6ff27a038c36015f1275bded1c7d8235137e96de487887c9ca57a",
+  "files": [
+    "services/api/app.py",
+    "services/api/test_app.py",
+    "services/api/requirements.txt",
+    "services/__init__.py",
+    "services/api/__init__.py",
+    "server/__init__.py",
+    "server/stream_wfq_ws.py",
+    "docker/prod/api/Dockerfile",
+    "docker/ws/Dockerfile",
+    "docker/ui/Dockerfile",
+    "ui/index.html",
+    "services/api/tests/test_acceptance_generated.py"
+  ]
+}

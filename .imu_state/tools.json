@@ -1,0 +1,9 @@
+{
+  "items": {
+    "exe:node": true,
+    "exe:npm": true,
+    "exe:sqlite3": true
+  },
+  "ts": 1757523946.538951,
+  "ttl": 43200
+}
