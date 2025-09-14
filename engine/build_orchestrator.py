@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import asyncio
 import hashlib
 import json
-import subprocess
 import os
 import tempfile
 from asyncio.subprocess import PIPE, STDOUT
@@ -110,6 +109,7 @@ class BuildOrchestrator:
         *,
         lint: bool = True,
         run_tests: Optional[bool] = None,
+        tests_soft: bool = True, # ← חדש: טסטים לא מפילים ok
         run_e2e: bool = False,
         e2e_dir: str = "tests",
         e2e_kexpr: str = "e2e or end2end or integration",
@@ -210,6 +210,7 @@ class BuildOrchestrator:
         timeout_s: Optional[float],
         cpu_seconds: Optional[int],
         mem_mb: Optional[int],
+        tests_soft: bool = True
     ) -> Dict[str, Any]:
         assert self.exec is not None, "Sandbox executor is not initialized"
 
@@ -284,7 +285,9 @@ class BuildOrchestrator:
         
         fail_on_tests = os.getenv("IMU_FAIL_ON_TESTS","0").strip().lower() in ("1","true","yes","on")
         ok = (lint_rc == 0 and rc1 == 0 and (not fail_on_tests or rc2 == 0) and (not run_e2e or rc3 == 0))
-
+        # אם טסטים “רכים”, הם לא משנים ok; נשמור את rc לדיאגנוסטיקה
+        if run_tests and not tests_soft:
+            ok = ok and (rc2 == 0)
         return {
             "ok": ok,
             "lint_rc": lint_rc, "lint_out": lint_out,

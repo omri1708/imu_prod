@@ -15,8 +15,6 @@ from engine.spec_refiner import SpecRefiner
 from server.dialog.state import SessionState
 from server.dialog.memory_bridge import MB
 from engine.orchestrator.run_store import run_context
-from server.dialog.intent_router import classify_intent
-from engine.orchestrator.universal_orchestrator import UniversalOrchestrator
 
 from engine.llm_gateway import LLMGateway
 from engine.intent_to_spec import IntentToSpec
@@ -252,8 +250,11 @@ async def send(body: Dict[str, Any]):
 
     # 2) מסלול מידע (Grounded-only)
     if intent == "knowledge":
-        if not sources and route.get("needs_sources"):
-            return _say(uid, st, "כדי לענות בלי הלוצינציות צריך קישורים/מקורות.", extra={"intent": route})
+        # מסלול ידע: אם סומן שדרושים מקורות ואין — נבקש אותם בצורה ידידותית
+        if not sources and bool(route.get("needs_sources")):
+            return _say(uid, st,
+                        "כדי לענות בלי הלוצינציות צריך קישורים/מקורות.",
+                        extra={"intent": route, "grounded": False, "build": None, "persist_dir": None})
         prompt = _sanitize_prompt(msg) or "ענה בקצרה על בסיס המקורות."
         out = GW.chat(user_id=uid, task="answer", intent="answer",
                     content={"prompt": prompt, "sources": sources, "context": ctx},
@@ -261,15 +262,18 @@ async def send(body: Dict[str, Any]):
         if not out.get("ok"):
             raise HTTPException(400, f"grounded-answer-refused: {out.get('error') or 'not_grounded'}")
         payload = out["payload"]
-        return _say(uid, st, payload["text"], extra={"citations": payload.get("citations"),
-                                                     "grounded": True, "intent": route, "build": None, "persist_dir": None})
+        return _say(uid, st, payload["text"],
+                    extra={"citations": payload.get("citations"),
+                           "grounded": True, "intent": route, "build": None, "persist_dir": None})
 
     # 3) מסלול שיחה (כשאין ביטחון בבנייה/ידע)
     if intent == "talk" or conf < 0.45:
         reply = GW.chat(user_id=uid, task="chat", intent="chat",
                         content={"prompt": msg, "context": ctx},
                         require_grounding=False, temperature=0.3)
-        return _say(uid, st, (reply.get("payload") or {}).get("text",""))
+        return _say(uid, st, (reply.get("payload") or {}).get("text",""),
+                    extra={"intent": route, "build": None, "persist_dir": None})
+
 
     # 4) מסלול בנייה—מילוי חריצים אם חסר
     required = route.get("required_slots") or []
@@ -395,9 +399,18 @@ async def send(body: Dict[str, Any]):
         decide = classify_intent(uid, msg, ctx) or {}
     except Exception:
         decide = {}
-    want_build = bool(body.get("force_build") or body.get("autobuild")) \
-                 or _looks_like_build(msg) \
-                 or ((decide.get("intent") == "build") and float(decide.get("confidence", 0.0)) >= build_threshold)
+    want_build = (
+        bool(body.get("force_build") or body.get("autobuild"))
+        or _looks_like_build(msg)
+        or ((decide.get("intent") == "build") and float(decide.get("confidence", 0.0)) >= build_threshold)
+    )
+
+    # אם לא בונים כעת – מחזירים Preview מסודר ויוצאים מוקדם (אין res בשימוש)
+    if not want_build:
+        return _say(uid, st,
+                    "התכנון מוכן. כדי לבנות שלח 'בנה' או קרא שוב עם autobuild=true.",
+                    extra={"mode": mode, "spec": spec_refined, "analysis": analysis,
+                           "intent": decide or route, "build": None, "persist_dir": None})
 
     if want_build:
         # 5.1 Run: בתוך run_context אטומי, עם persist_dir/audit per-run
@@ -448,23 +461,6 @@ async def send(body: Dict[str, Any]):
         return JSONResponse({"ok": bool(res.get("ok", False)), "text": text, "extra": extra,
                              "run_id": extra["run_id"], "build": res.get("build"),
                              "persist_dir": extra["persist_dir"]})
-
-    # --- אם לא בנינו: מחזירים Preview עשיר של התכנון ---
-    miss = []  # אין res כאן; לא בוצעה בנייה
-    auto = bool(body.get("auto_install") or CONS.get_flag(uid, "auto_install"))
-    if miss and auto:
-        try:
-            # נסיון השגה/התקנה אוטומטית (אם tools/auto_install קיים אצלך)
-            from tools.auto_install import auto_install_missing
-            _ = await auto_install_missing(miss)
-            # נסה שוב בנייה אחרי התקנה
-           # טריגר לבנייה יתבצע בקריאה הבאה עם autobuild/force_build
-        except Exception:
-            pass
-    # תשובת עיצוב/ניתוח עם הנחיה איך לבנות
-    return _say(uid, st, "תכנון מוכן. כדי לבנות שלח שוב עם autobuild=true או כתוב 'בנה'.",
-                extra={"mode": mode, "spec": spec_refined, "analysis": analysis,
-                       "intent": route, "build": None, "persist_dir": None})
     
     #from engine.self_heal.controller import self_heal_once, classify_failure
 
@@ -487,38 +483,6 @@ async def send(body: Dict[str, Any]):
     #    files = fixed
     
     # --- Autopilot: ריצה → דיאגנוזה → תיקון → ריצה חוזרת (עד N) ---
-    AUTOPILOT = True
-    max_attempts = int(os.environ.get("IMU_SELF_HEAL_MAX_ATTEMPTS", "2"))
-    attempt = 0
-
-    while AUTOPILOT and not res.get("ok") and attempt < max_attempts:
-        attempt += 1
-        co = (res.get("build",{}) or {}).get("compile_out","") or (res.get("build",{}) or {}).get("test_out","")
-        if not co:
-            break
-        rc = parse_traceback(co)  # ← קורא traceback אמיתי (לא טקסט גנרי)
-        files_map = (res.get("build",{}) or {}).get("inputs") or {}
-        apply_actions(rc.get("actions", []), files=files_map)  # ← מחיל פעולות תיקון מדויקות
-        res = await _exec_with_runctx(spec_refined)                # ← ריצה חוזרת
-
-    ctx.setdefault("__diagnostics__",{}).setdefault("autopilot",{})["attempts"] = attempt
-
-    miss = res.get("still_missing") or []
-    auto = bool(body.get("auto_install") or CONS.get_flag(uid, "auto_install"))
-    if miss and auto:
-        try:
-            # נסיון השגה/התקנה אוטומטית (אם tools/auto_install קיים אצלך)
-            from tools.auto_install import auto_install_missing
-            _ = await auto_install_missing(miss)
-            # נסה שוב בנייה אחרי התקנה
-            res = await _exec_with_runctx(spec_refined)
-        except Exception:
-            pass
-    elif miss and not auto:
-        # שיח לא טכני: לבקש אישור ולהמשיך
-        return _say(uid, st,
-            "נדרש אישור להתקנה/חיבור של כלים חיצוניים כדי להמשיך.",
-            extra={"needs_approvals":{"tools":miss},"hint":"שלח /chat/consent עם auto_install=true"})
 
 
     # --- Optional post-build actions for non-technical flow ---
@@ -608,14 +572,6 @@ async def send(body: Dict[str, Any]):
             "cd infra/terraform && terraform init && terraform apply -auto-approve"
         ]
     
-    # 6) ניסוח מענה ידידותי למשתמש + החזרת מידע עשיר
-    if res.get("ok"):
-        text = "בנוי ✔️"
-    elif res.get("still_missing"):
-        text = "נדרשים כלים חיצוניים (ראה extra.instructions)"
-    else:
-        text = "הבנייה נכשלה — צירפתי דיאגנוסטיקה והצעתי תיקון"
-
     from engine.deploy.rollback import suggest_rollback
     rb = suggest_rollback(spec_refined.get("title","app"))
     extra = {
@@ -624,10 +580,12 @@ async def send(body: Dict[str, Any]):
         "analysis": analysis,
         "files_written": written,
         "deploy_script": deploy_script,
-        **res,  # build, tools, missing, instructions, blueprint, domain...
+        **(res or {}),  # build, tools, missing, instructions, blueprint, domain...
         "rollback": rb,
-        "__diagnostics__": ctx.get("__diagnostics__", {})
+        "__diagnostics__": ctx.get("__diagnostics__", {}),
+        "intent": route,
     }
+
     def _human_text(res, ctx):
         if res.get("ok"):
             return "בנוי ✔️"

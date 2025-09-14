@@ -1,10 +1,10 @@
 # engine/pipeline_events.py (פאבליש לאירועים + אכיפת Contracts/Evidence)
 # -*- coding: utf-8 -*-
 import json, time, uuid, os
+from pathlib import Path
 from typing import Dict, Any, List
 from broker.stream import broker
 from audit.log import AppendOnlyAudit
-from governance.user_policy import Policy, EvidenceIndex
 from engine.adapter_registry import get_adapter
 from synth.specs_adapter import parse_adapter_jobs
 from engine.contracts_gate import enforce_respond_contract
@@ -14,21 +14,51 @@ from engine.telemetry.audit import emit_event
 from typing import Optional
 from engine.telemetry.audit import get_audit_path
 
-AUDIT = None  # DEPRECATED: per-run audit is handled via engine.telemetry.audit.emit_event(ctx, ...)
+# per-run caches
+_AUDIT_CACHE: Dict[str, AppendOnlyAudit] = {}
+_MERKLE_CACHE: Dict[str, MerkleAudit] = {}
 
+AUDIT = None  # DEPRECATED: per-run audit is handled via engine.telemetry.audit.emit_event(ctx, ...)
 AUDIT_MERKLE = None  # DEPRECATED: use engine.telemetry.audit.emit_event(ctx, ...)
+
+def _auditors(ctx: Dict[str, Any] | None = None):
+    p = Path(get_audit_path(ctx))  # e.g. /.../audit/pipeline.jsonl
+    p.parent.mkdir(parents=True, exist_ok=True)
+    key = str(p)
+    if key not in _AUDIT_CACHE:
+        _AUDIT_CACHE[key] = AppendOnlyAudit(str(p))
+        _MERKLE_CACHE[key] = MerkleAudit(str(p.with_suffix('')))
+    return _AUDIT_CACHE[key], _MERKLE_CACHE[key]
+
+
 def _audit(ctx: Optional[Dict[str, Any]] = None):
     p = get_audit_path(ctx)
     return AppendOnlyAudit(str(p)), MerkleAudit(str(p).rsplit(".",1)[0])
 
-def emit_progress(pct: float, *, ctx: Optional[Dict[str, Any]] = None):
-    broker.publish("progress", {"ts": time.time(), "value": float(pct), "run_id": (ctx or {}).get("run_id")}, priority="logic")
-    _, merkle = _audit(ctx); merkle.append("progress", {"value": float(pct)})
+def _audit_append(ctx, rec: dict):
+    p = get_audit_path(ctx)
+    os.makedirs(str(Path(p).parent), exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
- 
-def emit_timeline(kind: str, msg: str, *, ctx: Optional[Dict[str, Any]] = None):
-    broker.publish("timeline", {"ts": time.time(), "kind": kind, "msg": msg, "run_id": (ctx or {}).get("run_id")}, priority="telemetry")
-    _, merkle = _audit(ctx); merkle.append("timeline", {"kind": kind, "msg": msg})
+def emit_progress(pct: float, *, ctx: Dict[str, Any] | None = None):
+    broker.publish("progress", {
+        "ts": time.time(), "value": float(pct), "run_id": (ctx or {}).get("run_id")
+    }, priority="logic")
+    _, merkle = _auditors(ctx)
+    merkle.append("progress", {"value": float(pct)})
+    # כתיבה מפורשת ל‑pipeline.jsonl (ל־/events tailers)
+    _audit_append(ctx, {"type": "progress", "ts": time.time(), "pct": float(pct),
+                        "run_id": (ctx or {}).get("run_id")})
+
+def emit_timeline(kind: str, msg: str, *, ctx: Dict[str, Any] | None = None):
+    broker.publish("timeline", {
+        "ts": time.time(), "kind": kind, "msg": msg, "run_id": (ctx or {}).get("run_id")
+    }, priority="telemetry")
+    _, merkle = _auditors(ctx)
+    merkle.append("timeline", {"kind": kind, "msg": msg})
+    _audit_append(ctx, {"type": "event", "ts": time.time(),
+                        "note": msg, "kind": kind, "run_id": (ctx or {}).get("run_id")})
 
 def _emit(topic: str, event: dict, *, priority: int = 1):
     ok = broker.publish(topic, event, priority=priority)
@@ -56,16 +86,20 @@ def run_pipeline_spec(*, user: str, spec_text: str, policy, ev_index) -> str:
     run_id = f"run-{int(time.time()*1000)}"
     ws = os.path.abspath(os.path.join("var", "runs", run_id))
     os.makedirs(ws, exist_ok=True)
-    meta = {"run_id": run_id, "user": user}
-    _emit("progress", {"stage":"init","run_id":run_id,"user":user}, priority=0)
-    emit_timeline("run.start", f"{run_id} user={user}")
+    # מסלול audit per‑run
+    audit_path = str(Path(ws) / "audit" / "pipeline.jsonl")
+    Path(audit_path).parent.mkdir(parents=True, exist_ok=True)
+    ctx = {"run_id": run_id, "user": user, "audit_path": audit_path}
+    meta = {"run_id": run_id, "user": user, "audit_path": audit_path}
+    _emit("progress", {"stage": "init", **meta}, priority=0)
+    emit_timeline("run.start", f"{run_id} user={user}", ctx=ctx)
     # סימולציית שלבים בצנרת — מחליפים בחיבור שלך לצנרת אמיתית
     for step in range(0, 101, 5):
-        emit_progress(step)
+        emit_progress(step, ctx=ctx)
         if step in (10, 50, 90):
-            emit_timeline("stage", f"stage at {step}%")
+            emit_timeline("stage", f"stage at {step}%", ctx=ctx)
         time.sleep(0.02 + random.random()*0.01)
-    emit_timeline("run.done", f"{run_id} ok")
+    emit_timeline("run.done", f"{run_id} ok", ctx=ctx)
     # כתיבת יעדים (קבצים) אם ניתנו
     import pathlib
     try:
@@ -103,5 +137,5 @@ def run_pipeline_spec(*, user: str, spec_text: str, policy, ev_index) -> str:
         finally:
             _emit("progress", {"stage":"adapter_done","kind":kind,"i":i,"n":total, **meta})
 
-    _emit("progress", {"stage":"complete","run_id":run_id, **meta}, priority=0)
+    _emit("progress", {"stage":"complete", **meta}, priority=0)
     return run_id

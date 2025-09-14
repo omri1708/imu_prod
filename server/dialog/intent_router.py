@@ -16,10 +16,12 @@ def classify_intent(uid: str, msg: str, ctx: Dict[str,Any]) -> Dict[str,Any]:
     schema = {
         "type": "object",
         "properties": {
-            "intent": { "type":"string", "enum":["build","clarify","design","ask","other"] },
+        "intent": { "type":"string",
+                    "enum":["build","clarify","design","knowledge","talk","ask","other"] },
             "confidence": { "type":"number", "minimum":0, "maximum":1 },
             "targets": { "type":"array", "items": { "type":"string" } },
-            "why": { "type":"string" }
+            "why": { "type":"string" },
+            "needs_sources": { "type":"boolean" }
         },
         "required": ["intent","confidence"]
     }
@@ -27,9 +29,13 @@ def classify_intent(uid: str, msg: str, ctx: Dict[str,Any]) -> Dict[str,Any]:
         "user_text": msg,
         "context_json": json.dumps(ctx, ensure_ascii=False),
         "policy": (
-            "Choose intent=build only when the user explicitly asks to build now, "
-            "and there is enough info to start. If ambiguous or exploratory, choose clarify/design/ask. "
-            "Return JSON only."
+            "Classify user intent:\n"
+            "- knowledge: factual Q&A that requires sources/citations; set needs_sources=true when appropriate.\n"
+            "- talk: casual conversation or open-ended chat.\n"
+            "- build: only when user explicitly asks to build now AND enough info exists to start.\n"
+            "- clarify/design: when requirements incomplete or the user discusses solution design.\n"
+            "- ask: generic question that is not strictly factual.\n"
+            "Return strict JSON matching schema."
         )
     }
     res = GW.structured(
@@ -42,7 +48,8 @@ def classify_intent(uid: str, msg: str, ctx: Dict[str,Any]) -> Dict[str,Any]:
         "intent": str(j.get("intent") or "other"),
         "confidence": float(j.get("confidence") or 0.0),
         "targets": list(j.get("targets") or []),
-        "why": str(j.get("why") or "")
+        "why": str(j.get("why") or ""),
+        "needs_sources": bool(j.get("needs_sources", False))
     }
     return out
 

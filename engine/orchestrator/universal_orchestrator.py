@@ -417,7 +417,9 @@ class UniversalOrchestrator:
         try:
             build = await self.builder.build_python_module(files, name=(domain + "_glue"), persist_dir=workdir)  # חדש
         except TypeError:
-            build = await self.builder.build_python_module(files, name=(domain + "_glue"))  # תאימות
+            build = await self.builder.build_python_module(
+                files, name=(domain + "_glue"), persist_dir=workdir
+            )
         latency = int((time.time() - t0) * 1000)
         ok = bool(build.get("ok", False))
 

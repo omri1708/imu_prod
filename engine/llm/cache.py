@@ -66,15 +66,23 @@ class LLMCache:
         return entry
 
     # --- near-hit (approximate) ---
-    def near_hit(self, *, query: str, model: str, top_k: int = 3, threshold: float = 0.92) -> List[CacheEntry]:
+    def near_hit(self, query: str, model: str, threshold: float = 0.85, top_k: int = 3) -> List[CacheEntry]:
+        def _listdir_safe(path: str) -> List[str]:
+            try:
+                return [n for n in os.listdir(path) if not str(n).startswith('.')]
+            except (NotADirectoryError, FileNotFoundError):
+                return []
+
         hits: List[CacheEntry] = []
-        # חיפוש נאיבי לפי ratio של difflib על user_text_norm
-        for d1 in os.listdir(self.root):
+        for d1 in _listdir_safe(self.root):
             d1p = os.path.join(self.root, d1)
-            if not os.path.isdir(d1p): continue
-            for d2 in os.listdir(d1p):
+            if not os.path.isdir(d1p):
+                continue
+            for d2 in _listdir_safe(d1p):
                 d2p = os.path.join(d1p, d2)
-                for fn in os.listdir(d2p):
+                if not os.path.isdir(d2p):
+                    continue
+                for fn in _listdir_safe(d2p):
                     if not fn.endswith('.json'): continue
                     try:
                         obj = json.loads(open(os.path.join(d2p,fn),"r",encoding="utf-8").read())
@@ -83,7 +91,13 @@ class LLMCache:
                         if not src: continue
                         ratio = difflib.SequenceMatcher(a=query, b=src).ratio()
                         if ratio >= threshold:
-                            hits.append(CacheEntry(key=obj["key"], created=obj["created"], ttl_s=obj["ttl_s"], model=obj["model"], payload=obj["payload"]))
+                            hits.append(CacheEntry(
+                                key=obj["key"],
+                                created=obj["created"],
+                                ttl_s=obj["ttl_s"],
+                                model=obj["model"],
+                                payload=obj["payload"]
+                            ))
                     except Exception:
                         continue
         hits.sort(key=lambda e: e.created, reverse=True)
